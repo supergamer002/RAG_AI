@@ -25,6 +25,7 @@ def _ordina_per_punteggio(
 ) -> list[dict]:
     """Ordina i candidati per punteggio decrescente e tronca a top_n.
 
+    Arricchisce ciascun record candidato con il campo 'rerankScore'.
     Isolata dalla chiamata al modello per essere testabile senza
     FlagEmbedding/torch: qui si verifica solo la logica di selezione, non
     la qualita' dei punteggi (quella richiede il modello reale).
@@ -33,7 +34,13 @@ def _ordina_per_punteggio(
         raise ValueError(
             f"candidati ({len(candidati)}) e punteggi ({len(punteggi)}) devono avere la stessa lunghezza"
         )
-    accoppiati = sorted(zip(candidati, punteggi), key=lambda cp: cp[1], reverse=True)
+    risultati = []
+    for cand, score in zip(candidati, punteggi):
+        c = dict(cand)
+        c["rerankScore"] = round(float(score), 4)
+        risultati.append((c, score))
+
+    accoppiati = sorted(risultati, key=lambda cp: cp[1], reverse=True)
     return [c for c, _ in accoppiati[:top_n]]
 
 

@@ -57,28 +57,42 @@ def aggiorna_indice_fts_in_background(
 
 def _ricerca_vettoriale(
     tabella: lancedb.table.Table, vettore_query: list[float], k: int
-) -> list[str]:
-    """Ritorna i chunk_id in ordine di similarita' vettoriale decrescente."""
+) -> tuple[list[str], dict[str, float]]:
+    """Ritorna i chunk_id in ordine di similarita' e un dizionario id -> denseScore."""
     righe = (
         tabella.search(vettore_query, vector_column_name="vector")
         .limit(k)
-        .select(["chunk_id"])
+        .select(["chunk_id", "_distance"])
         .to_list()
     )
-    return [r["chunk_id"] for r in righe]
+    id_list = []
+    punteggi = {}
+    for r in righe:
+        cid = r["chunk_id"]
+        id_list.append(cid)
+        # Converti _distance (distanza L2/Cosine) in score di similarita' 0..1
+        dist = r.get("_distance", 1.0)
+        punteggi[cid] = max(0.0, round(1.0 - float(dist), 4)) if dist <= 1.0 else round(1.0 / (1.0 + float(dist)), 4)
+    return id_list, punteggi
 
 
 def _ricerca_fulltext(
     tabella: lancedb.table.Table, query_testo: str, k: int
-) -> list[str]:
-    """Ritorna i chunk_id in ordine di rilevanza BM25 decrescente."""
+) -> tuple[list[str], dict[str, float]]:
+    """Ritorna i chunk_id in ordine di rilevanza BM25 e un dizionario id -> bm25Score."""
     righe = (
         tabella.search(query_testo, query_type="fts")
         .limit(k)
-        .select(["chunk_id"])
+        .select(["chunk_id", "_score"])
         .to_list()
     )
-    return [r["chunk_id"] for r in righe]
+    id_list = []
+    punteggi = {}
+    for r in righe:
+        cid = r["chunk_id"]
+        id_list.append(cid)
+        punteggi[cid] = round(float(r.get("_score", 0.0)), 4)
+    return id_list, punteggi
 
 
 def _rrf_fusion(*ranking: list[str], k: int = RRF_K) -> list[str]:
@@ -111,8 +125,8 @@ def ricerca_ibrida(
     """
     def _esegui():
         k_candidati = top_k * 2  # margine sopra top_k prima della fusione
-        id_dense = _ricerca_vettoriale(tabella, vettore_query, k_candidati)
-        id_fts = _ricerca_fulltext(tabella, query_testo, k_candidati)
+        id_dense, punteggi_dense = _ricerca_vettoriale(tabella, vettore_query, k_candidati)
+        id_fts, punteggi_fts = _ricerca_fulltext(tabella, query_testo, k_candidati)
 
         id_fusi = _rrf_fusion(id_dense, id_fts)[:top_k]
         if not id_fusi:
@@ -121,9 +135,16 @@ def ricerca_ibrida(
         lista_sql = ", ".join(f"'{cid.replace('\'', '\'\'')}'" for cid in id_fusi)
         righe = tabella.search().where(f"chunk_id IN ({lista_sql})").to_list()
 
-        # to_list() non garantisce l'ordine del filtro IN: riordina secondo id_fusi.
+        # to_list() non garantisce l'ordine del filtro IN: riordina secondo id_fusi e arricchisci con i punteggi.
         per_id = {r["chunk_id"]: r for r in righe}
-        return [per_id[cid] for cid in id_fusi if cid in per_id]
+        risultati = []
+        for cid in id_fusi:
+            if cid in per_id:
+                record = dict(per_id[cid])
+                record["denseScore"] = punteggi_dense.get(cid, 0.0)
+                record["bm25Score"] = punteggi_fts.get(cid, 0.0)
+                risultati.append(record)
+        return risultati
 
     if tracciatore:
         with tracciatore.misura("hybrid_search"):
