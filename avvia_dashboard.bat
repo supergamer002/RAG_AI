@@ -1,23 +1,45 @@
 @echo off
-REM Avvia la dashboard grafica (webapp\frontend, progetto Nexus).
-REM Richiede Node.js installato (npm nel PATH) - prerequisito nuovo,
-REM non usato altrove nel progetto (che gira su Python/WSL).
+setlocal
 
-echo Verifico e installo le dipendenze Python del backend...
-python -m pip install --upgrade pip
-python -m pip install -r "%~dp0webapp\backend\requirements.txt"
+REM ------------------------------------------------------------
+REM Directory del progetto
+REM ------------------------------------------------------------
+cd /d "%~dp0"
 
-cd /d "%~dp0webapp\frontend"
+REM ------------------------------------------------------------
+REM BACKEND
+REM ------------------------------------------------------------
+start "Nexus Backend" wsl -d Ubuntu -e bash -lc "./run_backend.sh"
 
-if not exist node_modules (
-    echo Prima esecuzione: installo le dipendenze npm...
-    call npm install
-)
+REM ------------------------------------------------------------
+REM FRONTEND
+REM ------------------------------------------------------------
+start "Nexus Frontend" wsl -d Ubuntu -e bash -lc "./run_frontend.sh"
 
-echo Avvio del backend FastAPI in una nuova finestra...
-start "RAG AI Backend (FastAPI)" cmd /k "cd /d "%~dp0" && uvicorn webapp.backend.main:app --host 0.0.0.0 --port 8000 --reload"
+REM ------------------------------------------------------------
+REM Attendi l'avvio dei server
+REM ------------------------------------------------------------
+timeout /t 5 /nobreak >nul
 
-echo Avvio della dashboard frontend su http://localhost:3000 ...
-call npm run dev
+REM ------------------------------------------------------------
+REM Apri Edge
+REM ------------------------------------------------------------
+start "" msedge.exe "http://localhost:3000"
 
+echo.
+echo ==========================================
+echo       Nexus Dashboard avviata
+echo ==========================================
+echo.
+echo Premi un tasto per terminare backend e frontend...
+pause >nul
+
+REM ------------------------------------------------------------
+REM TERMINA I SERVER
+REM ------------------------------------------------------------
+wsl -d Ubuntu -e bash -lc "pkill -f run_backend.sh"
+wsl -d Ubuntu -e bash -lc "pkill -f run_frontend.sh"
+
+echo.
+echo Dashboard terminata.
 pause
