@@ -1,9 +1,9 @@
-export type NavPage = 
-  | 'settings' 
-  | 'query-workbench' 
-  | 'knowledge-nodes' 
-  | 'vector-explorer' 
-  | 'pipeline-telemetry' 
+export type NavPage =
+  | 'settings'
+  | 'query-workbench'
+  | 'knowledge-nodes'
+  | 'vector-explorer'
+  | 'pipeline-telemetry'
   | 'evaluations';
 
 export type ThemeMode = 'dark' | 'light' | 'system';
@@ -12,7 +12,7 @@ export type SettingsTab = 'runtime' | 'lancedb' | 'docling' | 'models' | 'securi
 export interface AppSettings {
   // Theme
   themeMode: ThemeMode;
-  
+
   // Runtime / FastAPI
   hostUrl: string;
   portNumber: number;

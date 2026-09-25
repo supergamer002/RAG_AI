@@ -6,6 +6,8 @@
 import { useState, useEffect } from 'react';
 import { NavPage, ThemeMode, AppSettings, ChunkItem, KnowledgeDocument, TelemetryLog } from './types';
 import { initialSettings, sampleDocuments, sampleChunks, sampleLogs, sampleEvalMetrics } from './data/mockData';
+
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 import { Sidebar } from './components/Sidebar';
 import { Header } from './components/Header';
 import { SettingsView } from './components/SettingsView';
@@ -23,7 +25,49 @@ export default function App() {
   const [documents, setDocuments] = useState<KnowledgeDocument[]>(sampleDocuments);
   const [chunks, setChunks] = useState<ChunkItem[]>(sampleChunks);
   const [logs, setLogs] = useState<TelemetryLog[]>(sampleLogs);
+  const [evalMetrics, setEvalMetrics] = useState(sampleEvalMetrics);
   const [searchFilter, setSearchFilter] = useState('');
+
+  // Fetch real data from backend on mount
+  useEffect(() => {
+    fetch(`${API_BASE_URL}/api/settings`)
+      .then((res) => res.ok ? res.json() : null)
+      .then((data) => {
+        if (data) setSettings((prev) => ({ ...prev, ...data }));
+      })
+      .catch(() => {});
+
+    fetch(`${API_BASE_URL}/api/documents`)
+      .then((res) => res.ok ? res.json() : null)
+      .then((data) => {
+        if (Array.isArray(data) && data.length > 0) setDocuments(data);
+      })
+      .catch(() => {});
+
+    fetch(`${API_BASE_URL}/api/chunks?page=1&pageSize=20`)
+      .then((res) => res.ok ? res.json() : null)
+      .then((data) => {
+        if (data && Array.isArray(data.items) && data.items.length > 0) {
+          setChunks(data.items);
+          setSelectedChunk(data.items[0]);
+        }
+      })
+      .catch(() => {});
+
+    fetch(`${API_BASE_URL}/api/telemetry`)
+      .then((res) => res.ok ? res.json() : null)
+      .then((data) => {
+        if (Array.isArray(data) && data.length > 0) setLogs(data);
+      })
+      .catch(() => {});
+
+    fetch(`${API_BASE_URL}/api/eval`)
+      .then((res) => res.ok ? res.json() : null)
+      .then((data) => {
+        if (Array.isArray(data)) setEvalMetrics(data);
+      })
+      .catch(() => {});
+  }, []);
 
   // Modals state
   const [selectedChunk, setSelectedChunk] = useState<ChunkItem | null>(sampleChunks[0]);
@@ -115,7 +159,19 @@ export default function App() {
   };
 
   const handleSaveSettings = () => {
-    showToast('Impostazioni salvate con successo.');
+    fetch(`${API_BASE_URL}/api/settings`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(settings),
+    })
+      .then((res) => {
+        if (res.ok) {
+          showToast('Impostazioni salvate con successo.');
+        } else {
+          showToast('Errore durante il salvataggio delle impostazioni.', true);
+        }
+      })
+      .catch(() => showToast('Impossibile contattare il backend.', true));
   };
 
   const handleResetSettings = () => {
@@ -238,7 +294,7 @@ export default function App() {
           )}
 
           {activePage === 'evaluations' && (
-            <EvaluationsView metrics={sampleEvalMetrics} onShowToast={showToast} />
+            <EvaluationsView metrics={evalMetrics} onShowToast={showToast} />
           )}
         </main>
       </div>

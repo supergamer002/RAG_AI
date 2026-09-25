@@ -10,7 +10,10 @@ if not exist node_modules (
     call npm install
 )
 
-echo Avvio la dashboard su http://localhost:3000 ...
+echo Avvio del backend FastAPI in una nuova finestra...
+start "RAG AI Backend (FastAPI)" cmd /k "cd /d "%~dp0" && uvicorn webapp.backend.main:app --host 0.0.0.0 --port 8000 --reload"
+
+echo Avvio della dashboard frontend su http://localhost:3000 ...
 call npm run dev
 
 pause

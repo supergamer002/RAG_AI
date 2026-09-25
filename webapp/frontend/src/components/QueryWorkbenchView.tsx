@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { ChunkItem } from '../types';
 
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+
 interface QueryWorkbenchViewProps {
   chunks: ChunkItem[];
   onInspectChunk: (chunk: ChunkItem) => void;
@@ -19,7 +21,9 @@ export const QueryWorkbenchView: React.FC<QueryWorkbenchViewProps> = ({
   const [hybridAlpha, setHybridAlpha] = useState(0.7);
   const [enableRerank, setEnableRerank] = useState(true);
   const [isExecuting, setIsExecuting] = useState(false);
-  const [hasExecuted, setHasExecuted] = useState(true);
+  const [hasExecuted, setHasExecuted] = useState(false);
+  const [realAnswer, setRealAnswer] = useState<string>('');
+  const [realChunks, setRealChunks] = useState<ChunkItem[]>(chunks);
 
   const sampleQueries = [
     'Come viene gestita la concorrenza asincrona tra FastAPI e LanceDB?',
@@ -29,12 +33,31 @@ export const QueryWorkbenchView: React.FC<QueryWorkbenchViewProps> = ({
   ];
 
   const handleRunQuery = () => {
+    if (!query.trim()) return;
     setIsExecuting(true);
-    setTimeout(() => {
-      setIsExecuting(false);
-      setHasExecuted(true);
-      onShowToast('Query ibrida eseguita in 24.8ms • 6 chunks estratti e riordinati.');
-    }, 450);
+
+    fetch(`${API_BASE_URL}/api/query`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, topK: 20, topN: 6 }),
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error('Errore query API');
+        return res.json();
+      })
+      .then((data) => {
+        setIsExecuting(false);
+        setHasExecuted(true);
+        setRealAnswer(data.answer);
+        if (data.chunks && Array.isArray(data.chunks)) {
+          setRealChunks(data.chunks);
+        }
+        onShowToast(`Query eseguita con successo! ${data.chunks?.length || 0} chunks estratti.`);
+      })
+      .catch(() => {
+        setIsExecuting(false);
+        onShowToast('Impossibile eseguire la query sul backend, dati di fallback visibili.', true);
+      });
   };
 
   return (
@@ -243,7 +266,7 @@ export const QueryWorkbenchView: React.FC<QueryWorkbenchViewProps> = ({
             </div>
 
             <div className="flex flex-col gap-3">
-              {chunks.map((chk, idx) => (
+              {(realChunks.length > 0 ? realChunks : chunks).map((chk, idx) => (
                 <div
                   key={chk.id}
                   className="bg-[#171b26] p-4 rounded-xl border border-[#262a35] hover:border-[#4cd7f6]/50 transition-all flex flex-col gap-2.5 shadow-sm group"
@@ -318,34 +341,18 @@ export const QueryWorkbenchView: React.FC<QueryWorkbenchViewProps> = ({
                 <span className="font-mono text-[10px] text-[#bcc9cd]">Temp: 0.1</span>
               </div>
 
-              <div className="text-[13px] text-[#dfe2f1] leading-relaxed flex flex-col gap-3 font-sans">
-                <p>
-                  Nell&apos;architettura di <strong>Nexus RAG</strong>, la concorrenza tra{' '}
-                  <span className="text-[#4cd7f6] font-semibold">FastAPI</span> e{' '}
-                  <span className="text-[#4cd7f6] font-semibold">LanceDB</span> viene gestita delegando le scansioni vettoriali IVF-PQ a un pool di worker asincroni su thread libuv dedicati{' '}
-                  <span
-                    onClick={() => onInspectChunk(chunks[0])}
-                    className="cursor-pointer text-[#4cd7f6] bg-[#06b6d4]/20 px-1 py-0.5 rounded text-[11px] font-mono hover:underline"
-                  >
-                    [Chunk #1084]
-                  </span>
-                  .
-                </p>
-
-                <p>
-                  LanceDB sfrutta il protocollo zero-copy <strong>Apache Arrow</strong>, permettendo la lettura vettoriale direttamente dai file su filesystem NVMe senza serializzazione intermedia o overhead di memoria condivisa{' '}
-                  <span
-                    onClick={() => onInspectChunk(chunks[1] || chunks[0])}
-                    className="cursor-pointer text-[#c0c1ff] bg-[#3131c0]/30 px-1 py-0.5 rounded text-[11px] font-mono hover:underline"
-                  >
-                    [Chunk #412]
-                  </span>
-                  .
-                </p>
-
-                <p>
-                  I 20 candidati preliminari aggregati dal motore ibrido vengono poi inviati al Cross-Encoder locale <code>ms-marco-MiniLM</code>, che ricalcola i cross-score congiunti e restituisce i migliori 6 passaggi al contesto di prompt.
-                </p>
+              <div className="text-[13px] text-[#dfe2f1] leading-relaxed flex flex-col gap-3 font-sans whitespace-pre-line">
+                {realAnswer ? (
+                  <p>{realAnswer}</p>
+                ) : (
+                  <>
+                    <p>
+                      Nell&apos;architettura di <strong>Nexus RAG</strong>, la concorrenza tra{' '}
+                      <span className="text-[#4cd7f6] font-semibold">FastAPI</span> e{' '}
+                      <span className="text-[#4cd7f6] font-semibold">LanceDB</span> viene gestita delegando le scansioni vettoriali IVF-PQ a un pool di worker asincroni su thread libuv dedicati.
+                    </p>
+                  </>
+                )}
               </div>
 
               {/* Citations Box */}

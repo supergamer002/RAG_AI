@@ -46,9 +46,16 @@ def connetti(db_path: str = DB_PATH_DEFAULT) -> lancedb.DBConnection:
 def apri_o_crea_tabella(
     db: lancedb.DBConnection, dimensione_embedding: int
 ) -> lancedb.table.Table:
-    if TABELLA in db.list_tables():
+    try:
+        tables = db.list_tables()
+        if isinstance(tables, list) and TABELLA in tables:
+            return db.open_table(TABELLA)
+    except Exception:
+        pass
+    try:
         return db.open_table(TABELLA)
-    return db.create_table(TABELLA, schema=_schema(dimensione_embedding))
+    except Exception:
+        return db.create_table(TABELLA, schema=_schema(dimensione_embedding))
 
 
 def upsert_chunks(

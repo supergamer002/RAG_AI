@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+
 interface IngestModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -22,23 +24,55 @@ export const IngestModal: React.FC<IngestModalProps> = ({
 
   if (!isOpen) return null;
 
+  const [fileObject, setFileObject] = useState<File | null>(null);
+
   const handleStartIngest = () => {
     setIsProcessing(true);
-    setStep('Docling layout parsing (AST extraction)...');
+    setStep('Inizio caricamento e parsing...');
 
-    setTimeout(() => {
-      setStep('Calcolo embeddings vettoriali via nomic-embed-text (1024-dim)...');
-      setTimeout(() => {
-        setStep('Scrittura IVF-PQ index in tabella "rag_chunks"...');
-        setTimeout(() => {
-          setIsProcessing(false);
-          const chunks = Math.floor(Math.random() * 200) + 180;
-          onIngestSuccess(selectedFile, chunks);
-          onShowToast(`File "${selectedFile}" indicizzato con successo (${chunks} chunks)!`);
-          onClose();
-        }, 600);
-      }, 700);
-    }, 800);
+    const formData = new FormData();
+    if (fileObject) {
+      formData.append('file', fileObject);
+    } else {
+      formData.append('path', selectedFile);
+    }
+
+    fetch(`${API_BASE_URL}/api/ingest`, {
+      method: 'POST',
+      body: formData,
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error('Errore nella richiesta di ingest');
+        return res.json();
+      })
+      .then((data) => {
+        const jobId = data.jobId;
+        setStep('Elaborazione in background in corso...');
+
+        const interval = setInterval(() => {
+          fetch(`${API_BASE_URL}/api/ingest/status/${jobId}`)
+            .then((res) => res.json())
+            .then((statusData) => {
+              if (statusData.status === 'completed') {
+                clearInterval(interval);
+                setIsProcessing(false);
+                const created = statusData.chunksCreated || 0;
+                onIngestSuccess(selectedFile, created);
+                onShowToast(`File "${selectedFile}" indicizzato con successo (${created} chunks)!`);
+                onClose();
+              } else if (statusData.status === 'failed') {
+                clearInterval(interval);
+                setIsProcessing(false);
+                onShowToast(`Errore durante l'ingest: ${statusData.error}`, true);
+              }
+            })
+            .catch(() => {});
+        }, 1000);
+      })
+      .catch((err) => {
+        setIsProcessing(false);
+        onShowToast(`Impossibile avviare l'ingest: ${err.message}`, true);
+      });
   };
 
   return (
