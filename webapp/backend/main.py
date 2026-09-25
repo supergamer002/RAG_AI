@@ -87,6 +87,9 @@ class QueryRequest(BaseModel):
     query: str
     topK: Optional[int] = 20
     topN: Optional[int] = 6
+    searchMode: Optional[str] = "hybrid"  # "hybrid" | "dense" | "sparse"
+    hybridAlpha: Optional[float] = 0.7
+    enableRerank: Optional[bool] = True
 
 
 def mappa_chunk_item(c: Dict[str, Any], idx: int, initial_rank_map: Dict[str, int]) -> Dict[str, Any]:
@@ -132,6 +135,30 @@ def read_root():
     return {"status": "ok", "service": "RAG AI Backend"}
 
 
+@app.get("/api/health")
+def get_health():
+    ollama_ok = False
+    try:
+        import requests
+        r = requests.get(config.get("ollamaUrl", "http://localhost:11434"), timeout=2)
+        ollama_ok = r.status_code == 200
+    except Exception:
+        ollama_ok = False
+
+    lancedb_ok = True
+    try:
+        tabella.count_rows()
+    except Exception:
+        lancedb_ok = False
+
+    return {
+        "fastapi": True,
+        "lancedb": lancedb_ok,
+        "ollama": ollama_ok,
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+
 @app.post("/api/query")
 def execute_query(req: QueryRequest):
     top_k = req.topK or config.get("topKCandidates", 20)
@@ -144,15 +171,28 @@ def execute_query(req: QueryRequest):
         query_emb = [0.0] * 1024
 
     try:
-        candidati = ricerca_ibrida(
-            tabella,
-            vettore_query=query_emb,
-            query_testo=req.query,
-            top_k=top_k,
-            tracciatore=tracciatore_globale,
-        )
+        if req.searchMode == "dense":
+            righe = tabella.search(query_emb, vector_column_name="vector").limit(top_k).to_list()
+            candidati = []
+            for r in righe:
+                dist = r.get("_distance", 1.0)
+                score = max(0.0, round(1.0 - float(dist), 4)) if dist <= 1.0 else round(1.0 / (1.0 + float(dist)), 4)
+                candidati.append({**r, "denseScore": score, "bm25Score": 0.0})
+        elif req.searchMode == "sparse":
+            righe = tabella.search(req.query, query_type="fts").limit(top_k).to_list()
+            candidati = []
+            for r in righe:
+                score = round(float(r.get("_score", 0.0)), 4)
+                candidati.append({**r, "denseScore": 0.0, "bm25Score": score})
+        else:
+            candidati = ricerca_ibrida(
+                tabella,
+                vettore_query=query_emb,
+                query_testo=req.query,
+                top_k=top_k,
+                tracciatore=tracciatore_globale,
+            )
     except Exception:
-        # Se l'indice FTS non e' ancora stato creato o la tabella e' vuota
         crea_indice_fulltext(tabella)
         try:
             candidati = ricerca_ibrida(
@@ -168,12 +208,17 @@ def execute_query(req: QueryRequest):
     initial_rank_map = {c.get("chunk_id", str(i)): i for i, c in enumerate(candidati)}
 
     try:
-        candidati_rerankati = reranker.rerank(
-            query=req.query,
-            candidati=candidati,
-            top_n=top_n,
-            tracciatore=tracciatore_globale,
-        )
+        if req.enableRerank is False:
+            candidati_rerankati = candidati[:top_n]
+            for c in candidati_rerankati:
+                c["rerankScore"] = c.get("denseScore", 0.0)
+        else:
+            candidati_rerankati = reranker.rerank(
+                query=req.query,
+                candidati=candidati,
+                top_n=top_n,
+                tracciatore=tracciatore_globale,
+            )
     except Exception:
         candidati_rerankati = candidati[:top_n]
 

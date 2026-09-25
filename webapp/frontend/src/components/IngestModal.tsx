@@ -112,17 +112,28 @@ export const IngestModal: React.FC<IngestModalProps> = ({
         {/* Content */}
         <div className="p-6 flex flex-col gap-4">
           {/* File Selection Box */}
-          <div className="border-2 border-dashed border-[#262a35] hover:border-[#4cd7f6]/50 rounded-xl p-6 flex flex-col items-center justify-center text-center bg-[#0a0e18] cursor-pointer transition-colors">
+          <label className="border-2 border-dashed border-[#262a35] hover:border-[#4cd7f6]/50 rounded-xl p-6 flex flex-col items-center justify-center text-center bg-[#0a0e18] cursor-pointer transition-colors relative">
+            <input
+              type="file"
+              accept=".pdf,.json,.md,.txt,.yaml,.docx"
+              onChange={(e) => {
+                if (e.target.files && e.target.files[0]) {
+                  setFileObject(e.target.files[0]);
+                  setSelectedFile(e.target.files[0].name);
+                }
+              }}
+              className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+            />
             <span className="material-symbols-outlined text-[#4cd7f6] text-[36px] mb-2">
               cloud_upload
             </span>
             <span className="text-[13px] text-[#dfe2f1] font-semibold font-mono">
-              {selectedFile}
+              {fileObject ? fileObject.name : selectedFile}
             </span>
             <span className="text-[11px] text-[#bcc9cd] mt-1">
-              Trascina o seleziona un file PDF, Markdown, DOCX o TXT (Max 50MB)
+              {fileObject ? `Selezionato: ${(fileObject.size / (1024 * 1024)).toFixed(2)} MB` : 'Clicca per selezionare un file PDF, JSON o Markdown da caricare'}
             </span>
-          </div>
+          </label>
 
           {/* Config options */}
           <div className="grid grid-cols-2 gap-4 pt-1 font-mono text-[12px]">

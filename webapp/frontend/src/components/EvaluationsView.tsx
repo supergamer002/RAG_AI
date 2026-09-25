@@ -86,42 +86,54 @@ export const EvaluationsView: React.FC<EvaluationsViewProps> = ({
         </button>
       </div>
 
-      {/* Metrics Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {metrics.map((m) => (
-          <div
-            key={m.id}
-            className="bg-[#171b26] p-5 rounded-xl border border-[#262a35] shadow-md flex flex-col justify-between gap-3"
-          >
-            <div className="flex flex-col gap-1">
-              <div className="flex items-center justify-between">
-                <span className="text-[14px] text-[#dfe2f1] font-semibold">{m.name}</span>
-                <span className="font-mono text-[11px] text-[#10b981] bg-[#10b981]/15 px-2 py-0.5 rounded border border-[#10b981]/30">
-                  {m.delta}
-                </span>
+      {/* Metrics Grid or Clean Empty State */}
+      {metrics.length === 0 ? (
+        <div className="bg-[#171b26] p-12 rounded-xl border border-[#262a35] shadow-md flex flex-col items-center justify-center text-center gap-3">
+          <span className="material-symbols-outlined text-[#4cd7f6] text-[48px] opacity-60">
+            analytics
+          </span>
+          <h3 className="text-[18px] text-[#dfe2f1] font-semibold">Nessun Test di Valutazione Eseguito</h3>
+          <p className="text-[13px] text-[#bcc9cd] max-w-lg">
+            Il modulo di valutazione automatica (golden set + recall@k) non e&apos; ancora stato generato. Gli endpoint di valutazione restituiranno dati reali una volta completato il benchmark.
+          </p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {metrics.map((m) => (
+            <div
+              key={m.id}
+              className="bg-[#171b26] p-5 rounded-xl border border-[#262a35] shadow-md flex flex-col justify-between gap-3"
+            >
+              <div className="flex flex-col gap-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-[14px] text-[#dfe2f1] font-semibold">{m.name}</span>
+                  <span className="font-mono text-[11px] text-[#10b981] bg-[#10b981]/15 px-2 py-0.5 rounded border border-[#10b981]/30">
+                    {m.delta}
+                  </span>
+                </div>
+                <p className="text-[12px] text-[#bcc9cd] leading-relaxed mt-1">{m.description}</p>
               </div>
-              <p className="text-[12px] text-[#bcc9cd] leading-relaxed mt-1">{m.description}</p>
-            </div>
 
-            <div className="flex flex-col gap-2 pt-2 border-t border-[#262a35]">
-              <div className="flex items-baseline justify-between font-mono">
-                <span className="text-[24px] font-bold text-[#4cd7f6]">
-                  {(m.score * 100).toFixed(1)}%
-                </span>
-                <span className="text-[11px] text-[#bcc9cd]">
-                  Target: &gt;{(m.benchmarkTarget * 100).toFixed(0)}%
-                </span>
-              </div>
-              <div className="w-full h-2 bg-[#0a0e18] rounded-full overflow-hidden border border-[#262a35]">
-                <div
-                  className="h-full bg-[#4cd7f6] rounded-full transition-all duration-500"
-                  style={{ width: `${Math.min(m.score * 100, 100)}%` }}
-                />
+              <div className="flex flex-col gap-2 pt-2 border-t border-[#262a35]">
+                <div className="flex items-baseline justify-between font-mono">
+                  <span className="text-[24px] font-bold text-[#4cd7f6]">
+                    {(m.score * 100).toFixed(1)}%
+                  </span>
+                  <span className="text-[11px] text-[#bcc9cd]">
+                    Target: &gt;{(m.benchmarkTarget * 100).toFixed(0)}%
+                  </span>
+                </div>
+                <div className="w-full h-2 bg-[#0a0e18] rounded-full overflow-hidden border border-[#262a35]">
+                  <div
+                    className="h-full bg-[#4cd7f6] rounded-full transition-all duration-500"
+                    style={{ width: `${Math.min(m.score * 100, 100)}%` }}
+                  />
+                </div>
               </div>
             </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
 
       {/* Test Cases Table */}
       <div className="bg-[#171b26] rounded-xl border border-[#262a35] overflow-hidden shadow-md flex flex-col">
