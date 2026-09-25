@@ -30,16 +30,24 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     setIsTesting(true);
     fetch(`${API_BASE_URL}/api/health`)
       .then((res) => res.json())
-      .then((data) => {
+      .then(() => {
         setIsTesting(false);
-        const fast = data.fastapi ? '200 OK' : 'Offline';
-        const lance = data.lancedb ? 'Active' : 'Error';
-        const ollama = data.ollama ? 'Online' : 'Offline';
         onTestConnections();
       })
       .catch(() => {
         setIsTesting(false);
         onTestConnections();
+      });
+  };
+
+  const handleRestart = () => {
+    fetch(`${API_BASE_URL}/api/system/restart`, { method: 'POST' })
+      .then((res) => res.json())
+      .then(() => {
+        onRestartWorker();
+      })
+      .catch(() => {
+        onRestartWorker();
       });
   };
 
@@ -85,7 +93,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </button>
 
             <button
-              onClick={onRestartWorker}
+              onClick={handleRestart}
               className="flex items-center gap-2 bg-[#262a35] hover:bg-[#353944] text-[#ffb4ab] px-4 py-2 rounded-lg font-mono text-[12px] transition-all border border-[#93000a]/40 cursor-pointer shadow-sm hover:border-[#ffb4ab]/40"
             >
               <span className="material-symbols-outlined text-[18px]">restart_alt</span>

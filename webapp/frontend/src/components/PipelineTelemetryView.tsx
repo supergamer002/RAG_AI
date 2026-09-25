@@ -36,6 +36,24 @@ export const PipelineTelemetryView: React.FC<PipelineTelemetryViewProps> = ({
   const avgDuration = durations.length > 0 ? (durations.reduce((a, b) => a + b, 0) / durations.length).toFixed(1) : '0.0';
   const p95Duration = durations.length > 0 ? (durations.sort((a, b) => a - b)[Math.floor(durations.length * 0.95)] || durations[durations.length - 1]).toFixed(1) : '0.0';
 
+  const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+
+  const handleClear = () => {
+    fetch(`${API_BASE_URL}/api/telemetry`, { method: 'DELETE' })
+      .then((res) => {
+        if (!res.ok) throw new Error('Errore svuotamento buffer');
+        return res.json();
+      })
+      .then(() => {
+        onClearLogs();
+        onShowToast('Buffer telemetria backend svuotato con successo.');
+      })
+      .catch(() => {
+        onClearLogs();
+        onShowToast('Buffer log locale svuotato.');
+      });
+  };
+
   return (
     <div className="p-6 flex flex-col gap-6 max-w-[1600px] mx-auto w-full relative z-10">
       {/* Header */}
@@ -73,11 +91,11 @@ export const PipelineTelemetryView: React.FC<PipelineTelemetryViewProps> = ({
             <span>{isPaused ? 'Riprendi' : 'Pausa Flusso'}</span>
           </button>
           <button
-            onClick={onClearLogs}
+            onClick={handleClear}
             className="flex items-center gap-1.5 px-3.5 py-2 bg-[#262a35] hover:bg-[#353944] text-[#bcc9cd] hover:text-[#dfe2f1] font-mono text-[12px] rounded-lg border border-[#3d494c]/40 transition-colors cursor-pointer"
           >
             <span className="material-symbols-outlined text-[16px]">delete_sweep</span>
-            <span>Pulisci</span>
+            <span>Svuota Buffer Logs</span>
           </button>
         </div>
       </div>

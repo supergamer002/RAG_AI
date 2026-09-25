@@ -18,8 +18,10 @@ import { PipelineTelemetryView } from './components/PipelineTelemetryView';
 import { EvaluationsView } from './components/EvaluationsView';
 import { ChunkModal } from './components/ChunkModal';
 import { IngestModal } from './components/IngestModal';
+import { DatabaseManagerModal } from './components/DatabaseManagerModal';
 
 export default function App() {
+  const [isDbModalOpen, setIsDbModalOpen] = useState(false);
   const [activePage, setActivePage] = useState<NavPage>('settings');
   const [settings, setSettings] = useState<AppSettings>(initialSettings);
   const [documents, setDocuments] = useState<KnowledgeDocument[]>(sampleDocuments);
@@ -28,8 +30,7 @@ export default function App() {
   const [evalMetrics, setEvalMetrics] = useState(sampleEvalMetrics);
   const [searchFilter, setSearchFilter] = useState('');
 
-  // Fetch real data from backend on mount
-  useEffect(() => {
+  const reloadData = () => {
     fetch(`${API_BASE_URL}/api/settings`)
       .then((res) => res.ok ? res.json() : null)
       .then((data) => {
@@ -40,16 +41,16 @@ export default function App() {
     fetch(`${API_BASE_URL}/api/documents`)
       .then((res) => res.ok ? res.json() : null)
       .then((data) => {
-        if (Array.isArray(data) && data.length > 0) setDocuments(data);
+        if (Array.isArray(data)) setDocuments(data);
       })
       .catch(() => {});
 
     fetch(`${API_BASE_URL}/api/chunks?page=1&pageSize=20`)
       .then((res) => res.ok ? res.json() : null)
       .then((data) => {
-        if (data && Array.isArray(data.items) && data.items.length > 0) {
+        if (data && Array.isArray(data.items)) {
           setChunks(data.items);
-          setSelectedChunk(data.items[0]);
+          if (data.items.length > 0) setSelectedChunk(data.items[0]);
         }
       })
       .catch(() => {});
@@ -57,7 +58,7 @@ export default function App() {
     fetch(`${API_BASE_URL}/api/telemetry`)
       .then((res) => res.ok ? res.json() : null)
       .then((data) => {
-        if (Array.isArray(data) && data.length > 0) setLogs(data);
+        if (Array.isArray(data)) setLogs(data);
       })
       .catch(() => {});
 
@@ -67,6 +68,10 @@ export default function App() {
         if (Array.isArray(data)) setEvalMetrics(data);
       })
       .catch(() => {});
+  };
+
+  useEffect(() => {
+    reloadData();
   }, []);
 
   // Modals state
@@ -243,6 +248,7 @@ export default function App() {
           onToggleTheme={handleToggleThemeQuick}
           onOpenIngest={() => setIsIngestModalOpen(true)}
           onOpenTerminal={() => setActivePage('pipeline-telemetry')}
+          onOpenDatabaseManager={() => setIsDbModalOpen(true)}
           searchFilter={searchFilter}
           onSearchChange={setSearchFilter}
         />
@@ -331,6 +337,14 @@ export default function App() {
         onClose={() => setIsIngestModalOpen(false)}
         onIngestSuccess={handleIngestSuccess}
         onShowToast={showToast}
+      />
+
+      {/* Database Manager Modal */}
+      <DatabaseManagerModal
+        isOpen={isDbModalOpen}
+        onClose={() => setIsDbModalOpen(false)}
+        onShowToast={showToast}
+        onDatabaseChanged={reloadData}
       />
     </div>
   );

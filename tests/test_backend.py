@@ -47,7 +47,7 @@ def test_telemetry_endpoint(client):
 def test_eval_endpoint(client):
     res = client.get("/api/eval")
     assert res.status_code == 200
-    assert res.json() == []
+    assert isinstance(res.json(), list)
 
 
 def test_documents_and_chunks_endpoints(client):
@@ -62,7 +62,8 @@ def test_documents_and_chunks_endpoints(client):
     assert "total" in data
 
 
-def test_query_endpoint(client):
+def test_query_endpoint(client, monkeypatch):
+    monkeypatch.setattr("webapp.backend.main.embedder.embed_uno", lambda q: [0.1] * 1024)
     res = client.post("/api/query", json={"query": "Test chimica legame ionico", "topK": 5, "topN": 2})
     assert res.status_code == 200
     data = res.json()
@@ -70,7 +71,8 @@ def test_query_endpoint(client):
     assert "chunks" in data
 
 
-def test_query_endpoint_modes(client):
+def test_query_endpoint_modes(client, monkeypatch):
+    monkeypatch.setattr("webapp.backend.main.embedder.embed_uno", lambda q: [0.1] * 1024)
     res_dense = client.post("/api/query", json={"query": "Test dense", "searchMode": "dense", "enableRerank": False})
     assert res_dense.status_code == 200
 

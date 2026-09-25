@@ -36,11 +36,22 @@ export const ChunkModal: React.FC<ChunkModalProps> = ({
     onShowToast(`Estratto Chunk #${chunk.chunkNum} scaricato.`);
   };
 
-  // Generate simulated float32 vector values based on chunk ID
-  const simulatedVector = Array.from({ length: 64 }, (_, i) => {
-    const val = Math.sin((i + chunk.chunkNum) * 0.35) * 0.45 + 0.12;
-    return Number(val.toFixed(4));
-  });
+  const [realVector, setRealVector] = useState<number[]>([]);
+  const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+
+  const handleToggleVector = () => {
+    if (!showVectorRaw && realVector.length === 0) {
+      fetch(`${API_BASE_URL}/api/chunks/${chunk.id}/vector`)
+        .then((res) => res.ok ? res.json() : null)
+        .then((data) => {
+          if (data && data.vector) {
+            setRealVector(data.vector);
+          }
+        })
+        .catch(() => {});
+    }
+    setShowVectorRaw(!showVectorRaw);
+  };
 
   return (
     <div
@@ -108,32 +119,8 @@ export const ChunkModal: React.FC<ChunkModalProps> = ({
               </span>
             </div>
 
-            <div className="bg-[#0a0e18] p-4 rounded-lg text-[13px] text-[#dfe2f1] leading-relaxed flex flex-col gap-3 border border-[#262a35] max-h-[46vh] overflow-y-auto">
-              <p className="text-[#bcc9cd]">
-                Nell&apos;architettura RAG ibrida con LanceDB, la pipeline di indicizzazione
-                vettoriale incrementale riceve i frammenti pre-processati dall&apos;engine Docling
-                garantendo la persistenza sia dello schema semantico che dei metadati di provenienza
-                strutturale.
-              </p>
-
-              <div className="bg-[#06b6d4]/15 p-3 rounded border-l-2 border-[#4cd7f6] text-[#dfe2f1]">
-                <span className="text-[#4cd7f6] font-semibold">
-                  &ldquo;...i vettori calcolati tramite {chunk.embeddingModel} vengono scritti nella
-                  tabella LanceDB con un indice full-text tandem su colonna contenuto per abilitare
-                  la query ibrida simultanea.&rdquo;
-                </span>{' '}
-                Questo assicura che il calcolo di prossimità coseno su LanceDB operi con
-                zero-overhead di memoria condivisa tramite protocollo Apache Arrow.
-              </div>
-
-              <p className="text-[#bcc9cd]">
-                In fase di interrogazione, la query utente viene convertita in un embedding denso da
-                Ollama ({chunk.embeddingModel}) a dimensione 1024. Parallelamente, un filtro
-                token-based BM25 genera la lista preliminare dei 20 candidati. Il punteggio combinato
-                viene infine ricalcolato dal modulo Cross-Encoder MiniLM garantendo la massima
-                precisione ed eliminando le allucinazioni semantiche prima del dispatch al Large
-                Language Model.
-              </p>
+            <div className="bg-[#0a0e18] p-4 rounded-lg text-[13px] text-[#dfe2f1] leading-relaxed flex flex-col gap-3 border border-[#262a35] max-h-[46vh] overflow-y-auto font-sans whitespace-pre-wrap">
+              <p>{chunk.text}</p>
             </div>
 
             {/* Vector Inspector Collapsible */}
@@ -141,13 +128,13 @@ export const ChunkModal: React.FC<ChunkModalProps> = ({
               <div className="mt-2 bg-[#0a0e18] p-3 rounded-lg border border-[#4cd7f6]/40 flex flex-col gap-2">
                 <div className="flex items-center justify-between text-[11px] font-mono">
                   <span className="text-[#4cd7f6] font-semibold">
-                    Visualizzazione Spazio Vettoriale 1024-dim float32 (Anteprima prime 64 dim)
+                    Visualizzazione Spazio Vettoriale Reale LanceDB (1024-dim float32)
                   </span>
-                  <span className="text-[#bcc9cd]">L2 Norm = 1.000</span>
+                  <span className="text-[#bcc9cd]">{realVector.length > 0 ? `${realVector.length} dims caricate` : 'Caricamento...'}</span>
                 </div>
                 {/* Visual heat strip */}
                 <div className="grid grid-cols-16 sm:grid-cols-32 gap-1 py-1">
-                  {simulatedVector.map((val, idx) => {
+                  {(realVector.length > 0 ? realVector.slice(0, 64) : Array.from({ length: 64 }, () => 0.1)).map((val, idx) => {
                     const norm = Math.min(Math.max((val + 0.5) / 1.0, 0), 1);
                     return (
                       <div
@@ -162,7 +149,7 @@ export const ChunkModal: React.FC<ChunkModalProps> = ({
                   })}
                 </div>
                 <div className="font-mono text-[10px] text-[#bcc9cd] max-h-20 overflow-y-auto bg-[#171b26] p-2 rounded border border-[#262a35] break-all">
-                  [{simulatedVector.join(', ')}, ... +960 dims]
+                  [{realVector.length > 0 ? realVector.join(', ') : 'Caricamento vettore reale...'}, ...]
                 </div>
               </div>
             )}
@@ -237,7 +224,7 @@ export const ChunkModal: React.FC<ChunkModalProps> = ({
             </button>
 
             <button
-              onClick={() => setShowVectorRaw(!showVectorRaw)}
+              onClick={handleToggleVector}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-mono transition-colors border ${
                 showVectorRaw
                   ? 'bg-[#4cd7f6]/20 text-[#4cd7f6] border-[#4cd7f6]/50'

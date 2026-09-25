@@ -36,6 +36,9 @@ export const IngestModal: React.FC<IngestModalProps> = ({
     } else {
       formData.append('path', selectedFile);
     }
+    formData.append('chunkSize', String(chunkTokens));
+    formData.append('chunkOverlap', String(overlapPct));
+    formData.append('ocrEnabled', String(ocrEnabled));
 
     fetch(`${API_BASE_URL}/api/ingest`, {
       method: 'POST',
