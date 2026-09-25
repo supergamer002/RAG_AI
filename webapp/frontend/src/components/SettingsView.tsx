@@ -1,3 +1,4 @@
+import { apiFetch, apiJson, apiUrl, getApiToken, setApiToken } from '../api';
 import React, { useState } from 'react';
 import { AppSettings, SettingsTab, ThemeMode } from '../types';
 
@@ -28,7 +29,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
   const handleTestPing = () => {
     setIsTesting(true);
-    fetch(`${API_BASE_URL}/api/health`)
+    apiFetch(`/api/health`)
       .then((res) => res.json())
       .then(() => {
         setIsTesting(false);
@@ -41,9 +42,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   };
 
   const handleRestart = () => {
-    fetch(`${API_BASE_URL}/api/system/restart`, { method: 'POST' })
-      .then((res) => res.json())
-      .then(() => {
+    apiFetch(`/api/system/restart`, { method: 'POST' })
+      .then(async (res) => {
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}`);
+        }
+        await res.json();
         onRestartWorker();
       })
       .catch(() => {
@@ -70,7 +74,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <div className="flex items-center gap-1.5 font-mono text-[11px] text-[#4cd7f6] uppercase tracking-wider">
                 <span>System Configuration Hub</span>
                 <span>•</span>
-                <span className="text-[#bcc9cd]">SYS_CONF.TOML</span>
+                <span className="text-[#bcc9cd]">SYS_CONF.JSON</span>
               </div>
               <h1 className="text-[24px] sm:text-[28px] text-[#dfe2f1] tracking-tight font-semibold truncate leading-tight mt-0.5">
                 Parametri di Rete &amp; Orchestrazione
@@ -97,7 +101,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               className="flex items-center gap-2 bg-[#262a35] hover:bg-[#353944] text-[#ffb4ab] px-4 py-2 rounded-lg font-mono text-[12px] transition-all border border-[#93000a]/40 cursor-pointer shadow-sm hover:border-[#ffb4ab]/40"
             >
               <span className="material-symbols-outlined text-[18px]">restart_alt</span>
-              <span>Riavvia Worker FastAPI</span>
+              <span>Ricarica Runtime RAG</span>
             </button>
           </div>
         </div>
@@ -110,9 +114,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <span className="font-mono text-[10px] text-[#bcc9cd] uppercase tracking-wider">
                 Storage Index VFS
               </span>
-              <span className="text-[20px] text-[#dfe2f1] font-semibold mt-0.5">1.84 GB</span>
+              <span className="text-[20px] text-[#dfe2f1] font-semibold mt-0.5 truncate max-w-[220px]">{settings.storagePath || '—'}</span>
               <span className="font-mono text-[11px] text-[#4cd7f6]">
-                {settings.tableName} [Lance 0.12]
+                Tabella: {settings.tableName || '—'}
               </span>
             </div>
             <div className="w-10 h-10 rounded-lg bg-[#1c1f2a] flex items-center justify-center text-[#4cd7f6] border border-[#262a35]">
@@ -124,11 +128,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           <div className="bg-[#171b26] p-4 rounded-xl flex items-center justify-between border border-[#262a35] shadow-sm">
             <div className="flex flex-col">
               <span className="font-mono text-[10px] text-[#bcc9cd] uppercase tracking-wider">
-                VRAM Dedicata Ollama
+                Ollama Endpoint
               </span>
-              <span className="text-[20px] text-[#dfe2f1] font-semibold mt-0.5">4.22 / 12.0 GB</span>
+              <span className="text-[16px] text-[#dfe2f1] font-semibold mt-1 truncate max-w-[220px]">{settings.ollamaUrl || '—'}</span>
               <span className="font-mono text-[11px] text-[#d0bcff]">
-                Keep-Alive {settings.keepAliveSeconds}s Lock
+                Keep-Alive {settings.keepAliveSeconds}s
               </span>
             </div>
             <div className="w-10 h-10 rounded-lg bg-[#1c1f2a] flex items-center justify-center text-[#d0bcff] border border-[#262a35]">
@@ -164,7 +168,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 {settings.topKCandidates} → {settings.topNRerank}
               </span>
               <span className="font-mono text-[11px] text-[#4cd7f6] truncate max-w-[160px]">
-                ms-marco-MiniLM-L-6
+                {settings.crossEncoderModel || '—'}
               </span>
             </div>
             <div className="w-10 h-10 rounded-lg bg-[#1c1f2a] flex items-center justify-center text-[#4cd7f6] border border-[#262a35]">
@@ -624,12 +628,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       <input
                         type="text"
                         value={settings.storagePath}
+                        disabled
                         onChange={(e) => onUpdateSettings({ storagePath: e.target.value })}
                         className="w-full bg-[#0a0e18] text-[#dfe2f1] font-mono text-[12px] pl-10 pr-3 py-2.5 rounded-lg border border-[#262a35] focus:outline-none focus:ring-1 focus:ring-[#4cd7f6]"
                       />
                     </div>
                     <span className="text-[11px] text-[#bcc9cd]">
-                      Path relativo o assoluto al filesystem locale.
+                      Gestito dal Database Manager multi-database; non modificabile da questa schermata.
                     </span>
                   </div>
 
@@ -644,12 +649,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       <input
                         type="text"
                         value={settings.tableName}
+                        disabled
                         onChange={(e) => onUpdateSettings({ tableName: e.target.value })}
                         className="w-full bg-[#0a0e18] text-[#dfe2f1] font-mono text-[12px] pl-10 pr-3 py-2.5 rounded-lg border border-[#262a35] focus:outline-none focus:ring-1 focus:ring-[#4cd7f6]"
                       />
                     </div>
                     <span className="text-[11px] text-[#bcc9cd]">
-                      Tabella Lance con indici semantici e full-text.
+                      Tabella primaria gestita automaticamente dal backend (chunks).
                     </span>
                   </div>
                 </div>
@@ -661,6 +667,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     </label>
                     <select
                       value={settings.indexAlgorithm}
+                      disabled
                       onChange={(e) =>
                         onUpdateSettings({
                           indexAlgorithm: e.target.value as 'IVF-PQ' | 'Flat' | 'HNSW',
@@ -681,6 +688,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     <input
                       type="number"
                       value={settings.numCentroids}
+                      disabled
                       onChange={(e) => onUpdateSettings({ numCentroids: Number(e.target.value) })}
                       className="w-full bg-[#0a0e18] text-[#dfe2f1] font-mono text-[12px] px-3 py-2.5 rounded-lg border border-[#262a35] focus:outline-none focus:ring-1 focus:ring-[#4cd7f6]"
                     />
@@ -693,6 +701,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     <input
                       type="number"
                       value={settings.subVectorsPQ}
+                      disabled
                       onChange={(e) => onUpdateSettings({ subVectorsPQ: Number(e.target.value) })}
                       className="w-full bg-[#0a0e18] text-[#dfe2f1] font-mono text-[12px] px-3 py-2.5 rounded-lg border border-[#262a35] focus:outline-none focus:ring-1 focus:ring-[#4cd7f6]"
                     />
@@ -706,6 +715,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     </label>
                     <select
                       value={settings.distanceMetric}
+                      disabled
                       onChange={(e) =>
                         onUpdateSettings({
                           distanceMetric: e.target.value as 'Cosine' | 'L2' | 'Dot',
@@ -732,6 +742,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       <input
                         type="checkbox"
                         checked={settings.autoCompaction}
+                        disabled
                         onChange={(e) => onUpdateSettings({ autoCompaction: e.target.checked })}
                         className="sr-only peer"
                       />
@@ -926,27 +937,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <div className="mt-3 bg-[#0a0e18] p-4 rounded-lg border border-[#262a35] flex flex-col gap-3">
                     <div className="flex justify-between font-mono text-[11px]">
                       <span className="text-[#bcc9cd]">Stato Modelli in VRAM</span>
-                      <span className="text-[#4cd7f6] font-semibold">Caricati a caldo</span>
-                    </div>
-
-                    <div className="flex flex-col gap-1">
-                      <div className="flex justify-between font-mono text-[11px] text-[#bcc9cd]">
-                        <span>nomic-embed-text</span>
-                        <span className="text-[#dfe2f1]">1.2 GB</span>
-                      </div>
-                      <div className="w-full h-2 bg-[#1c1f2a] rounded-full overflow-hidden">
-                        <div className="w-1/4 h-full bg-[#4cd7f6] rounded-full" />
-                      </div>
-                    </div>
-
-                    <div className="flex flex-col gap-1">
-                      <div className="flex justify-between font-mono text-[11px] text-[#bcc9cd]">
-                        <span>ms-marco-MiniLM (Cross-Enc)</span>
-                        <span className="text-[#dfe2f1]">680 MB</span>
-                      </div>
-                      <div className="w-full h-2 bg-[#1c1f2a] rounded-full overflow-hidden">
-                        <div className="w-1/6 h-full bg-[#d0bcff] rounded-full" />
-                      </div>
+                      <span className="text-[#4cd7f6] font-semibold">Configurato</span>
                     </div>
                   </div>
                 </div>
@@ -982,16 +973,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     <label className="font-mono text-[11px] text-[#bcc9cd] uppercase tracking-wider font-semibold">
                       Embedding Model Attivo
                     </label>
-                    <select
+                    <input
+                      type="text"
                       value={settings.embeddingModel}
                       onChange={(e) => onUpdateSettings({ embeddingModel: e.target.value })}
                       className="w-full bg-[#0a0e18] text-[#dfe2f1] font-mono text-[12px] px-3 py-2.5 rounded-lg border border-[#262a35] focus:outline-none focus:ring-1 focus:ring-[#4cd7f6]"
-                    >
-                      <option value="nomic-embed-text">nomic-embed-text (dim: 1024, context: 8k)</option>
-                      <option value="mistral-embed:7b">mistral-embed:7b (dim: 4096)</option>
-                      <option value="bge-m3">bge-m3:latest (dim: 1024, multilingue)</option>
-                      <option value="all-minilm">all-minilm-l6-v2 (dim: 384)</option>
-                    </select>
+                    />
                     <span className="text-[11px] text-[#bcc9cd]">
                       Generatore del vettore denso di query e frammenti.
                     </span>

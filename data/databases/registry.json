@@ -4,7 +4,7 @@
     {
       "id": "default",
       "name": "Database Primario RAG",
-      "path": "/app/data/databases/default_lancedb",
+      "folderName": "default_lancedb",
       "createdAt": "2026-09-25 14:51:44",
       "updatedAt": "2026-09-25 14:51:44",
       "embeddingModel": "qwen3-embedding:0.6b",

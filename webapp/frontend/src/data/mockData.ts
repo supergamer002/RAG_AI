@@ -24,7 +24,7 @@ export const initialSettings: AppSettings = {
   keepAliveSeconds: 300,
   topKCandidates: 20,
   topNRerank: 6,
-  apiToken: 'nx_rag_secret_live_09748b6c8f9024c',
+  apiToken: '',
   rateLimitMax: 120,
   maxPayloadMB: 50,
 };

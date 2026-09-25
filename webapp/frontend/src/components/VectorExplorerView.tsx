@@ -1,3 +1,4 @@
+import { apiFetch, apiJson, apiUrl, getApiToken, setApiToken } from '../api';
 import React, { useState } from 'react';
 import { ChunkItem } from '../types';
 
@@ -5,26 +6,29 @@ interface VectorExplorerViewProps {
   chunks: ChunkItem[];
   onInspectChunk: (chunk: ChunkItem) => void;
   onShowToast: (msg: string, isError?: boolean) => void;
+  globalSearch?: string;
 }
 
 export const VectorExplorerView: React.FC<VectorExplorerViewProps> = ({
   chunks,
   onInspectChunk,
   onShowToast,
+  globalSearch = '',
 }) => {
   const [projection, setProjection] = useState<'UMAP' | 't-SNE' | 'PCA'>('UMAP');
   const [selectedCluster, setSelectedCluster] = useState<string>('all');
   const [hoveredChunk, setHoveredChunk] = useState<ChunkItem | null>(null);
   const [projectedPoints, setProjectedPoints] = useState<any[]>([]);
+  const [vectorDimensions, setVectorDimensions] = useState<number | null>(null);
 
   const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
   const handleSelectAlgorithm = (alg: 'UMAP' | 't-SNE' | 'PCA') => {
     setProjection(alg);
-    fetch(`${API_BASE_URL}/api/vectors/project`, {
+    apiFetch(`/api/vectors/project`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ method: alg.toLowerCase(), sampleSize: 500 }),
+      body: JSON.stringify({ method: alg.toLowerCase() }),
     })
       .then((res) => {
         if (!res.ok) throw new Error('Errore nel calcolo della proiezione');
@@ -33,9 +37,13 @@ export const VectorExplorerView: React.FC<VectorExplorerViewProps> = ({
       .then((data) => {
         if (data && Array.isArray(data.points) && data.points.length > 0) {
           setProjectedPoints(data.points);
+          setVectorDimensions(typeof data.dimensions === 'number' ? data.dimensions : null);
           onShowToast(`Proiezione vettoriale reale ${alg} calcolata per ${data.points.length} punti.`);
         } else {
-          onShowToast(`Proiezione vettoriale ${alg} completata.`);
+          setProjectedPoints([]);
+          setVectorDimensions(null);
+          setHoveredChunk(null);
+          onShowToast(`Nessuna proiezione disponibile per ${alg}.`, true);
         }
       })
       .catch((err) => {
@@ -43,45 +51,39 @@ export const VectorExplorerView: React.FC<VectorExplorerViewProps> = ({
       });
   };
 
-  // Clusters
+  // Cluster membership is computed by KMeans and has no semantic name by itself.
+  // Build the filter list only from clusters returned by the backend.
   const clusters = [
-    { name: 'all', label: 'Tutti i Cluster' },
-    { name: 'Architettura Vettoriale', label: 'Architettura Vettoriale', color: '#4cd7f6' },
-    { name: 'Runtime FastAPI', label: 'Runtime FastAPI', color: '#6366f1' },
-    { name: 'Ingestion & Docling', label: 'Ingestion & Docling', color: '#d0bcff' },
-    { name: 'Modelli & Ollama', label: 'Modelli & Ollama', color: '#10b981' },
+    { name: 'all', label: 'Tutti i Cluster', color: '#4cd7f6' },
+    ...Array.from(new Set(projectedPoints.map((p) => p.cluster).filter(Boolean)))
+      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+      .map((name) => ({ name, label: name, color: getClusterColor(name) })),
   ];
 
-  // Dynamically mapped vector scatter points from real chunks prop
-  const scatterPoints = (projectedPoints.length > 0
-    ? projectedPoints.map((p, idx) => ({
-        ...chunks[idx % chunks.length],
-        id: p.id,
-        docTitle: p.title,
-        section: p.section,
-        cluster: p.cluster,
-        x: p.x,
-        y: p.y,
-      }))
-    : chunks.map((chk, idx) => ({
-        ...chk,
-        x: chk.x ?? ((idx * 37 + 12) % 80 + 10),
-        y: chk.y ?? ((idx * 53 + 24) % 80 + 10),
-      })));
+  // Show only coordinates returned by the backend. Never synthesize fallback points.
+  const scatterPoints = projectedPoints.map((p, idx) => ({
+    ...(chunks[idx % Math.max(chunks.length, 1)] ?? {}),
+    id: p.id,
+    docTitle: p.title,
+    section: p.section,
+    cluster: p.cluster,
+    x: p.x,
+    y: p.y,
+  })) as ChunkItem[];
+
+  const visibleScatterPoints = scatterPoints.filter((point) => {
+    const term = globalSearch.trim().toLowerCase();
+    if (!term) return true;
+    return [point.id, point.docTitle, point.section, point.cluster].some((value) =>
+      String(value ?? '').toLowerCase().includes(term)
+    );
+  });
 
   const getClusterColor = (clusterName: string) => {
-    switch (clusterName) {
-      case 'Architettura Vettoriale':
-        return '#4cd7f6';
-      case 'Runtime FastAPI':
-        return '#6366f1';
-      case 'Ingestion & Docling':
-        return '#d0bcff';
-      case 'Modelli & Ollama':
-        return '#10b981';
-      default:
-        return '#4cd7f6';
-    }
+    const palette = ['#4cd7f6', '#6366f1', '#d0bcff', '#10b981', '#f59e0b', '#f472b6'];
+    const match = clusterName.match(/Cluster\s+(\d+)/i);
+    const index = match ? Number(match[1]) : 0;
+    return palette[index % palette.length];
   };
 
   return (
@@ -96,7 +98,7 @@ export const VectorExplorerView: React.FC<VectorExplorerViewProps> = ({
             <div className="flex items-center gap-1.5 font-mono text-[11px] text-[#4cd7f6] uppercase tracking-wider">
               <span>Embedding Space Dimensionality Reduction</span>
               <span>•</span>
-              <span className="text-[#bcc9cd]">1024_DIM → 2D</span>
+              <span className="text-[#bcc9cd]">{vectorDimensions == null ? '—' : `${vectorDimensions}_DIM`} → 2D</span>
             </div>
             <h1 className="text-[24px] sm:text-[28px] text-[#dfe2f1] tracking-tight font-semibold">
               Vector Space Explorer
@@ -127,7 +129,7 @@ export const VectorExplorerView: React.FC<VectorExplorerViewProps> = ({
 
       {/* Cluster Filters */}
       <div className="flex flex-wrap items-center gap-2">
-        <span className="font-mono text-[11px] text-[#bcc9cd]">Cluster Semantici:</span>
+        <span className="font-mono text-[11px] text-[#bcc9cd]">Cluster KMeans:</span>
         {clusters.map((c) => {
           const isActive = selectedCluster === c.name;
           return (
@@ -155,7 +157,7 @@ export const VectorExplorerView: React.FC<VectorExplorerViewProps> = ({
         <div className="lg:col-span-8 bg-[#171b26] p-6 rounded-xl border border-[#262a35] shadow-lg flex flex-col gap-4 relative">
           <div className="flex items-center justify-between text-[11px] font-mono text-[#bcc9cd]">
             <span>Metrica di Distanza: Cosine Similarity [1 - cos(θ)]</span>
-            <span>14,820 Vettori Indicizzati</span>
+            <span>{projectedPoints.length.toLocaleString()} Vettori Proiettati</span>
           </div>
 
           {/* Scatter Plot 2D Box */}
@@ -177,9 +179,18 @@ export const VectorExplorerView: React.FC<VectorExplorerViewProps> = ({
             </div>
 
             {/* Scatter Points */}
-            {scatterPoints
-              .filter((p) => selectedCluster === 'all' || p.cluster === selectedCluster)
-              .map((point) => {
+            {scatterPoints.length === 0 ? (
+              <div className="relative z-10 flex max-w-md flex-col items-center gap-2 text-center font-mono">
+                <span className="material-symbols-outlined text-[34px] text-[#4cd7f6]">scatter_plot</span>
+                <span className="text-[13px] font-semibold text-[#dfe2f1]">Nessuna proiezione reale disponibile</span>
+                <span className="text-[11px] leading-relaxed text-[#bcc9cd]">
+                  Seleziona UMAP, t-SNE o PCA per calcolare una nuova proiezione dei vettori.
+                </span>
+              </div>
+            ) : (
+              scatterPoints
+                .filter((p) => selectedCluster === 'all' || p.cluster === selectedCluster)
+                .map((point) => {
                 const color = getClusterColor(point.cluster);
                 const isHovered = hoveredChunk?.id === point.id;
                 return (
@@ -212,7 +223,8 @@ export const VectorExplorerView: React.FC<VectorExplorerViewProps> = ({
                     </span>
                   </div>
                 );
-              })}
+              })
+            )}
           </div>
 
           <div className="flex items-center justify-between font-mono text-[11px] text-[#bcc9cd]">

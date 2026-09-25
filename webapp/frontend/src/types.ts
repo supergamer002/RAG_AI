@@ -62,10 +62,12 @@ export interface ChunkItem {
   rerankScore: number;
   rankDelta: number;
   tokenCount: number;
-  overlapPct: number;
+  overlapPct: number | null;
   embeddingModel: string;
   dimensions: string;
   charOffset: string;
+  vectorTable?: string;
+  parser?: string;
   timestamp: string;
   cluster: string;
   x?: number;
@@ -76,14 +78,14 @@ export interface KnowledgeDocument {
   id: string;
   name: string;
   type: 'PDF' | 'Markdown' | 'DOCX' | 'Python' | 'YAML';
-  fileSize: string;
+  fileSize: string | null;
   chunksCount: number;
   sectionsCount: number;
   status: 'Indicizzato' | 'In Elaborazione' | 'In Coda' | 'Verificato';
   indexedDate: string;
   vectorTable: string;
-  embeddingDim: number;
-  doclingAstNodes: number;
+  embeddingDim: number | null;
+  doclingAstNodes: number | null;
 }
 
 export interface TelemetryLog {

@@ -4,13 +4,17 @@ import { NavPage } from '../types';
 interface SidebarProps {
   activePage: NavPage;
   onNavigate: (page: NavPage) => void;
-  chunksCount?: number;
+  chunksCount?: number | null;
+  activeModel?: string | null;
+  latencyMs?: number | null;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
   activePage,
   onNavigate,
-  chunksCount = 14820,
+  chunksCount = null,
+  activeModel = null,
+  latencyMs = null,
 }) => {
   const navItems: { id: NavPage; label: string; icon: string }[] = [
     { id: 'query-workbench', label: 'Query Workbench', icon: 'terminal' },
@@ -35,7 +39,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 Nexus RAG
               </span>
               <span className="font-mono text-[10px] text-[#bcc9cd] tracking-wide">
-                v2.4 Telemetry
+                runtime
               </span>
             </div>
           </div>
@@ -52,7 +56,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <span className="material-symbols-outlined text-[14px]">database</span>
             </div>
             <div className="font-mono text-[14px] text-[#4cd7f6] font-semibold">
-              {chunksCount.toLocaleString()}{' '}
+              {chunksCount == null ? '—' : chunksCount.toLocaleString()}{' '}
               <span className="text-[11px] text-[#bcc9cd] font-normal">chunks</span>
             </div>
           </div>
@@ -90,17 +94,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
               ACTIVE MODEL
             </span>
             <span className="font-mono text-[10px] text-[#d0bcff] px-1.5 py-0.5 rounded bg-[#3131c0]/30 border border-[#3131c0]/50">
-              dense+bm25
+              embedding
             </span>
           </div>
           <div className="font-mono text-[12px] text-[#dfe2f1] font-medium truncate">
-            mistral-embed:7b
+            {activeModel ?? '—'}
           </div>
         </div>
         <div className="flex items-center justify-between px-1 text-[#bcc9cd]">
           <span className="font-mono text-[10px] tracking-wider uppercase">LATENCY</span>
           <span className="font-mono text-[11px] text-[#4cd7f6] font-semibold">
-            24.8ms avg
+            {latencyMs == null ? '—' : `${latencyMs.toFixed(1)}ms avg`}
           </span>
         </div>
       </div>

@@ -78,3 +78,29 @@ def test_query_endpoint_modes(client, monkeypatch):
 
     res_sparse = client.post("/api/query", json={"query": "Test sparse", "searchMode": "sparse", "enableRerank": False})
     assert res_sparse.status_code == 200
+
+
+def test_vector_projection_uses_numeric_cluster_labels(client, monkeypatch):
+    class DummySearch:
+        def limit(self, _n):
+            return self
+
+        def to_list(self):
+            return [
+                {"chunk_id": "a", "fonte_titolo": "Doc A", "sezione": "A", "vector": [1.0, 0.0]},
+                {"chunk_id": "b", "fonte_titolo": "Doc B", "sezione": "B", "vector": [0.0, 1.0]},
+            ]
+
+    class DummyTable:
+        def search(self):
+            return DummySearch()
+
+    monkeypatch.setattr("webapp.backend.main.db_manager.get_active_table", lambda: DummyTable())
+    monkeypatch.setattr("sklearn.cluster.KMeans.fit_predict", lambda self, X: __import__('numpy').array([0, 1]))
+
+    res = client.post("/api/vectors/project", json={"method": "pca", "sampleSize": 2})
+    assert res.status_code == 200
+    points = res.json()["points"]
+    assert [p["cluster"] for p in points] == ["Cluster 0", "Cluster 1"]
+    assert all("clusterId" in p for p in points)
+    assert all("Architettura" not in p["cluster"] for p in points)

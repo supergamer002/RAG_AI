@@ -1,3 +1,4 @@
+import { apiFetch, apiJson, apiUrl, getApiToken, setApiToken } from '../api';
 import React, { useState } from 'react';
 import { KnowledgeDocument } from '../types';
 
@@ -5,28 +6,52 @@ interface KnowledgeNodesViewProps {
   documents: KnowledgeDocument[];
   onShowToast: (msg: string, isError?: boolean) => void;
   onOpenIngest: () => void;
+  globalSearch?: string;
+  chunksCount?: number | null;
+  activeDatabaseName?: string | null;
+  storageBytes?: number | null;
 }
+
+const formatBytes = (bytes: number): string => {
+  if (!Number.isFinite(bytes) || bytes < 0) return '—';
+  if (bytes === 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const exponent = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  return `${(bytes / 1024 ** exponent).toFixed(exponent === 0 ? 0 : 2)} ${units[exponent]}`;
+};
 
 export const KnowledgeNodesView: React.FC<KnowledgeNodesViewProps> = ({
   documents,
   onShowToast,
   onOpenIngest,
+  globalSearch = '',
+  chunksCount = null,
+  activeDatabaseName = null,
+  storageBytes = null,
 }) => {
   const [filterType, setFilterType] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState('');
 
   const filteredDocs = documents.filter((doc) => {
     const matchesType = filterType === 'all' || doc.type.toLowerCase() === filterType.toLowerCase();
+    const localSearch = searchTerm.trim().toLowerCase();
+    const global = globalSearch.trim().toLowerCase();
     const matchesSearch =
-      doc.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      doc.vectorTable.toLowerCase().includes(searchTerm.toLowerCase());
-    return matchesType && matchesSearch;
+      !localSearch ||
+      doc.name.toLowerCase().includes(localSearch) ||
+      doc.vectorTable.toLowerCase().includes(localSearch);
+    const matchesGlobal =
+      !global ||
+      [doc.name, doc.type, doc.vectorTable, doc.status].some((value) =>
+        value.toLowerCase().includes(global)
+      );
+    return matchesType && matchesSearch && matchesGlobal;
   });
 
   const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
   const handleReindex = (docId: string, docName: string) => {
-    fetch(`${API_BASE_URL}/api/documents/${docId}/reindex`, {
+    apiFetch(`/api/documents/${docId}/reindex`, {
       method: 'POST',
     })
       .then((res) => {
@@ -53,7 +78,7 @@ export const KnowledgeNodesView: React.FC<KnowledgeNodesViewProps> = ({
             <div className="flex items-center gap-1.5 font-mono text-[11px] text-[#4cd7f6] uppercase tracking-wider">
               <span>Knowledge Source Corpus</span>
               <span>•</span>
-              <span className="text-[#bcc9cd]">DOCLING_VFS</span>
+              <span className="text-[#bcc9cd]">ACTIVE_DATABASE</span>
             </div>
             <h1 className="text-[24px] sm:text-[28px] text-[#dfe2f1] tracking-tight font-semibold">
               Knowledge Nodes &amp; Corpus Documentale
@@ -93,20 +118,20 @@ export const KnowledgeNodesView: React.FC<KnowledgeNodesViewProps> = ({
             Totale Chunks Generati
           </span>
           <div className="text-[22px] font-semibold text-[#dfe2f1] mt-1">
-            14,820 <span className="text-[12px] font-normal text-[#bcc9cd]">frammenti</span>
+            {chunksCount == null ? '—' : chunksCount.toLocaleString()} <span className="text-[12px] font-normal text-[#bcc9cd]">frammenti</span>
           </div>
           <span className="font-mono text-[11px] text-[#d0bcff] mt-0.5">
-            Dimensione media: 492 tok
+            Conteggio restituito dal database attivo
           </span>
         </div>
 
         <div className="bg-[#171b26] p-4 rounded-xl border border-[#262a35]">
           <span className="font-mono text-[10px] text-[#bcc9cd] uppercase tracking-wider">
-            Tabella LanceDB Primaria
+            Database attivo
           </span>
-          <div className="text-[22px] font-semibold text-[#dfe2f1] mt-1">rag_chunks</div>
+          <div className="text-[22px] font-semibold text-[#dfe2f1] mt-1 truncate">{activeDatabaseName ?? "—"}</div>
           <span className="font-mono text-[11px] text-[#c0c1ff] mt-0.5">
-            IVF-PQ (256 Voronoi Centroids)
+            Identificativo fornito dal backend
           </span>
         </div>
 
@@ -114,9 +139,9 @@ export const KnowledgeNodesView: React.FC<KnowledgeNodesViewProps> = ({
           <span className="font-mono text-[10px] text-[#bcc9cd] uppercase tracking-wider">
             Storage VFS Occupato
           </span>
-          <div className="text-[22px] font-semibold text-[#dfe2f1] mt-1">1.84 GB</div>
+          <div className="text-[22px] font-semibold text-[#dfe2f1] mt-1">{storageBytes == null ? '—' : formatBytes(storageBytes)}</div>
           <span className="font-mono text-[11px] text-[#10b981] mt-0.5">
-            Compaction: Ottimizzata
+            Dimensione su disco del database attivo
           </span>
         </div>
       </div>
@@ -187,7 +212,7 @@ export const KnowledgeNodesView: React.FC<KnowledgeNodesViewProps> = ({
                       {doc.type}
                     </span>
                   </td>
-                  <td className="py-3.5 px-4 font-mono text-[#bcc9cd]">{doc.fileSize}</td>
+                  <td className="py-3.5 px-4 font-mono text-[#bcc9cd]">{doc.fileSize ?? '—'}</td>
                   <td className="py-3.5 px-4 font-mono text-[#4cd7f6] font-semibold">
                     {doc.chunksCount.toLocaleString()}
                   </td>
@@ -200,7 +225,7 @@ export const KnowledgeNodesView: React.FC<KnowledgeNodesViewProps> = ({
                       {doc.status}
                     </span>
                   </td>
-                  <td className="py-3.5 px-4 font-mono text-[#bcc9cd]">{doc.indexedDate}</td>
+                  <td className="py-3.5 px-4 font-mono text-[#bcc9cd]">{doc.indexedDate || '—'}</td>
                   <td className="py-3.5 px-4 text-right">
                     <div className="flex items-center justify-end gap-2 font-mono">
                       <button

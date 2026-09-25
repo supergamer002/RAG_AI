@@ -1,23 +1,69 @@
-import React, { useState } from 'react';
+import { apiFetch, apiJson, apiUrl, getApiToken, setApiToken } from '../api';
+import React, { useEffect, useState } from 'react';
 import { TelemetryLog } from '../types';
 
 interface PipelineTelemetryViewProps {
   logs: TelemetryLog[];
   onClearLogs: () => void;
+  onLogsUpdate: (logs: TelemetryLog[]) => void;
   onShowToast: (msg: string, isError?: boolean) => void;
+  globalSearch?: string;
 }
 
 export const PipelineTelemetryView: React.FC<PipelineTelemetryViewProps> = ({
   logs,
   onClearLogs,
+  onLogsUpdate,
   onShowToast,
+  globalSearch = '',
 }) => {
   const [levelFilter, setLevelFilter] = useState<string>('all');
   const [isPaused, setIsPaused] = useState(false);
+  const [streamStatus, setStreamStatus] = useState<'connecting' | 'connected' | 'paused' | 'error'>('connecting');
+  const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
-  const filteredLogs = logs.filter(
-    (log) => levelFilter === 'all' || log.level.toLowerCase() === levelFilter.toLowerCase()
-  );
+  useEffect(() => {
+    if (isPaused) {
+      setStreamStatus('paused');
+      return;
+    }
+
+    const token = getApiToken();
+    const streamUrl = `${API_BASE_URL}/api/telemetry/stream${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+    const source = new EventSource(streamUrl);
+    setStreamStatus('connecting');
+
+    const handleTelemetry = (event: MessageEvent<string>) => {
+      try {
+        const nextLogs = JSON.parse(event.data);
+        if (Array.isArray(nextLogs)) {
+          onLogsUpdate(nextLogs);
+          setStreamStatus('connected');
+        }
+      } catch {
+        setStreamStatus('error');
+      }
+    };
+
+    source.addEventListener('telemetry', handleTelemetry as EventListener);
+    source.onopen = () => setStreamStatus('connected');
+    source.onerror = () => {
+      setStreamStatus('error');
+      source.close();
+    };
+
+    return () => {
+      source.close();
+    };
+  }, [API_BASE_URL, isPaused, onLogsUpdate]);
+
+  const globalTerm = globalSearch.trim().toLowerCase();
+  const filteredLogs = logs.filter((log) => {
+    const matchesLevel = levelFilter === 'all' || log.level.toLowerCase() === levelFilter.toLowerCase();
+    const matchesGlobal = !globalTerm || [log.timestamp, log.level, log.component, log.message]
+      .some((value) => String(value ?? '').toLowerCase().includes(globalTerm));
+    return matchesLevel && matchesGlobal;
+  });
 
   const getLevelBadge = (level: TelemetryLog['level']) => {
     switch (level) {
@@ -36,10 +82,8 @@ export const PipelineTelemetryView: React.FC<PipelineTelemetryViewProps> = ({
   const avgDuration = durations.length > 0 ? (durations.reduce((a, b) => a + b, 0) / durations.length).toFixed(1) : '0.0';
   const p95Duration = durations.length > 0 ? (durations.sort((a, b) => a - b)[Math.floor(durations.length * 0.95)] || durations[durations.length - 1]).toFixed(1) : '0.0';
 
-  const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
-
   const handleClear = () => {
-    fetch(`${API_BASE_URL}/api/telemetry`, { method: 'DELETE' })
+    apiFetch(`/api/telemetry`, { method: 'DELETE' })
       .then((res) => {
         if (!res.ok) throw new Error('Errore svuotamento buffer');
         return res.json();
@@ -48,9 +92,8 @@ export const PipelineTelemetryView: React.FC<PipelineTelemetryViewProps> = ({
         onClearLogs();
         onShowToast('Buffer telemetria backend svuotato con successo.');
       })
-      .catch(() => {
-        onClearLogs();
-        onShowToast('Buffer log locale svuotato.');
+      .catch((err) => {
+        onShowToast(`Impossibile svuotare il buffer backend: ${err instanceof Error ? err.message : 'errore sconosciuto'}`, true);
       });
   };
 
@@ -66,13 +109,13 @@ export const PipelineTelemetryView: React.FC<PipelineTelemetryViewProps> = ({
             <div className="flex items-center gap-1.5 font-mono text-[11px] text-[#4cd7f6] uppercase tracking-wider">
               <span>Telemetry &amp; Engine Logs</span>
               <span>•</span>
-              <span className="text-[#bcc9cd]">STDOUT / SSE</span>
+              <span className="text-[#bcc9cd]">TELEMETRY / SSE</span>
             </div>
             <h1 className="text-[24px] sm:text-[28px] text-[#dfe2f1] tracking-tight font-semibold">
               Pipeline Telemetry &amp; Log Console
             </h1>
             <p className="text-[13px] text-[#bcc9cd]">
-              Flusso in tempo reale dei log diagnostici UVicorn, LanceDB compactor, Docling AST e Ollama memory pool.
+              Flusso SSE in tempo reale delle metriche diagnostiche RAG.
             </p>
           </div>
         </div>
@@ -80,8 +123,9 @@ export const PipelineTelemetryView: React.FC<PipelineTelemetryViewProps> = ({
         <div className="flex items-center gap-2">
           <button
             onClick={() => {
-              setIsPaused(!isPaused);
-              onShowToast(isPaused ? 'Streaming log riattivato' : 'Streaming log in pausa');
+              const nextPaused = !isPaused;
+              setIsPaused(nextPaused);
+              onShowToast(nextPaused ? 'Streaming log in pausa' : 'Streaming log riattivato');
             }}
             className="flex items-center gap-1.5 px-3.5 py-2 bg-[#262a35] hover:bg-[#353944] text-[#dfe2f1] font-mono text-[12px] rounded-lg border border-[#3d494c]/40 transition-colors cursor-pointer"
           >
@@ -130,8 +174,12 @@ export const PipelineTelemetryView: React.FC<PipelineTelemetryViewProps> = ({
           <span className="font-mono text-[10px] text-[#bcc9cd] uppercase tracking-wider">
             Stato Backend
           </span>
-          <div className="text-[22px] font-semibold text-[#10b981] mt-1 font-mono">200 OK</div>
-          <span className="font-mono text-[11px] text-[#bcc9cd]">Uvicorn / FastAPI Online</span>
+          <div className={`text-[22px] font-semibold mt-1 font-mono ${
+            streamStatus === 'connected' ? 'text-[#10b981]' : streamStatus === 'paused' ? 'text-[#f59e0b]' : 'text-[#ffb4ab]'
+          }`}>
+            {streamStatus === 'connected' ? 'SSE ONLINE' : streamStatus === 'paused' ? 'SSE PAUSED' : streamStatus === 'connecting' ? 'SSE CONNECTING' : 'SSE ERROR'}
+          </div>
+          <span className="font-mono text-[11px] text-[#bcc9cd]">Stream telemetria backend</span>
         </div>
       </div>
 

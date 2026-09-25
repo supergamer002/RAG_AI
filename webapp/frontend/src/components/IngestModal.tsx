@@ -1,3 +1,4 @@
+import { apiFetch, apiJson, apiUrl, getApiToken, setApiToken } from '../api';
 import React, { useState } from 'react';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
@@ -39,7 +40,7 @@ export const IngestModal: React.FC<IngestModalProps> = ({
     formData.append('chunkOverlap', String(overlapPct));
     formData.append('ocrEnabled', String(ocrEnabled));
 
-    fetch(`${API_BASE_URL}/api/ingest`, {
+    apiFetch(`/api/ingest`, {
       method: 'POST',
       body: formData,
     })
@@ -52,15 +53,20 @@ export const IngestModal: React.FC<IngestModalProps> = ({
         setStep('Elaborazione in background in corso...');
 
         const interval = setInterval(() => {
-          fetch(`${API_BASE_URL}/api/ingest/status/${jobId}`)
-            .then((res) => res.json())
+          apiFetch(`/api/ingest/status/${jobId}`)
+            .then(async (res) => {
+              const statusData = await res.json().catch(() => null);
+              if (!res.ok) throw new Error(statusData?.detail || `HTTP ${res.status}`);
+              return statusData;
+            })
             .then((statusData) => {
               if (statusData.status === 'completed') {
                 clearInterval(interval);
                 setIsProcessing(false);
                 const created = statusData.chunksCreated || 0;
-                onIngestSuccess(selectedFile, created);
-                onShowToast(`File "${selectedFile}" indicizzato con successo (${created} chunks)!`);
+                const ingestedName = fileObject?.name || selectedFile;
+                onIngestSuccess(ingestedName, created);
+                onShowToast(`File "${ingestedName}" indicizzato con successo (${created} chunks)!`);
                 onClose();
               } else if (statusData.status === 'failed') {
                 clearInterval(interval);
@@ -68,7 +74,11 @@ export const IngestModal: React.FC<IngestModalProps> = ({
                 onShowToast(`Errore durante l'ingest: ${statusData.error}`, true);
               }
             })
-            .catch(() => {});
+            .catch((err) => {
+              clearInterval(interval);
+              setIsProcessing(false);
+              onShowToast(`Errore nel controllo dell'ingest: ${err instanceof Error ? err.message : 'errore sconosciuto'}`, true);
+            });
         }, 1000);
       })
       .catch((err) => {

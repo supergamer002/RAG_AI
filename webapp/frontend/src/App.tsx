@@ -1,11 +1,12 @@
+import { apiFetch, apiJson, apiUrl, getApiToken, setApiToken } from './api';
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { useState, useEffect } from 'react';
-import { NavPage, ThemeMode, AppSettings, ChunkItem, KnowledgeDocument, TelemetryLog } from './types';
-import { initialSettings, sampleDocuments, sampleChunks, sampleLogs, sampleEvalMetrics } from './data/mockData';
+import { NavPage, ThemeMode, AppSettings, ChunkItem, KnowledgeDocument, TelemetryLog, EvalMetric } from './types';
+import { initialSettings } from './data/defaultSettings';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 import { Sidebar } from './components/Sidebar';
@@ -24,28 +25,32 @@ export default function App() {
   const [isDbModalOpen, setIsDbModalOpen] = useState(false);
   const [activePage, setActivePage] = useState<NavPage>('settings');
   const [settings, setSettings] = useState<AppSettings>(initialSettings);
-  const [documents, setDocuments] = useState<KnowledgeDocument[]>(sampleDocuments);
-  const [chunks, setChunks] = useState<ChunkItem[]>(sampleChunks);
-  const [logs, setLogs] = useState<TelemetryLog[]>(sampleLogs);
-  const [evalMetrics, setEvalMetrics] = useState(sampleEvalMetrics);
+  const [documents, setDocuments] = useState<KnowledgeDocument[]>([]);
+  const [chunks, setChunks] = useState<ChunkItem[]>([]);
+  const [logs, setLogs] = useState<TelemetryLog[]>([]);
+  const [evalMetrics, setEvalMetrics] = useState<EvalMetric[]>([]);
   const [searchFilter, setSearchFilter] = useState('');
+  const [chunksCount, setChunksCount] = useState<number | null>(null);
+  const [storageBytes, setStorageBytes] = useState<number | null>(null);
+  const [activeDatabaseName, setActiveDatabaseName] = useState<string | null>(null);
+  const [avgLatencyMs, setAvgLatencyMs] = useState<number | null>(null);
 
   const reloadData = () => {
-    fetch(`${API_BASE_URL}/api/settings`)
+    apiFetch(`/api/settings`)
       .then((res) => res.ok ? res.json() : null)
       .then((data) => {
         if (data) setSettings((prev) => ({ ...prev, ...data }));
       })
       .catch(() => {});
 
-    fetch(`${API_BASE_URL}/api/documents`)
+    apiFetch(`/api/documents`)
       .then((res) => res.ok ? res.json() : null)
       .then((data) => {
         if (Array.isArray(data)) setDocuments(data);
       })
       .catch(() => {});
 
-    fetch(`${API_BASE_URL}/api/chunks?page=1&pageSize=20`)
+    apiFetch(`/api/chunks?page=1&pageSize=20`)
       .then((res) => res.ok ? res.json() : null)
       .then((data) => {
         if (data && Array.isArray(data.items)) {
@@ -55,17 +60,37 @@ export default function App() {
       })
       .catch(() => {});
 
-    fetch(`${API_BASE_URL}/api/telemetry`)
+    apiFetch(`/api/telemetry`)
       .then((res) => res.ok ? res.json() : null)
       .then((data) => {
-        if (Array.isArray(data)) setLogs(data);
+        if (Array.isArray(data)) {
+          setLogs(data);
+          const durations = data
+            .map((entry) => Number(entry?.durationMs))
+            .filter((value) => Number.isFinite(value) && value >= 0);
+          setAvgLatencyMs(durations.length ? durations.reduce((a, b) => a + b, 0) / durations.length : null);
+        }
       })
       .catch(() => {});
 
-    fetch(`${API_BASE_URL}/api/eval`)
+    apiFetch(`/api/eval`)
       .then((res) => res.ok ? res.json() : null)
       .then((data) => {
         if (Array.isArray(data)) setEvalMetrics(data);
+      })
+      .catch(() => {});
+
+    setChunksCount(null);
+    setStorageBytes(null);
+    setActiveDatabaseName(null);
+    apiFetch(`/api/stats`)
+      .then((res) => res.ok ? res.json() : null)
+      .then((data) => {
+        if (data) {
+          setChunksCount(typeof data.chunks === 'number' && Number.isFinite(data.chunks) ? data.chunks : null);
+          setStorageBytes(typeof data.storageBytes === 'number' && Number.isFinite(data.storageBytes) ? data.storageBytes : null);
+          setActiveDatabaseName(data.activeDatabase?.name ?? null);
+        }
       })
       .catch(() => {});
   };
@@ -75,7 +100,7 @@ export default function App() {
   }, []);
 
   // Modals state
-  const [selectedChunk, setSelectedChunk] = useState<ChunkItem | null>(sampleChunks[0]);
+  const [selectedChunk, setSelectedChunk] = useState<ChunkItem | null>(null);
   const [isChunkModalOpen, setIsChunkModalOpen] = useState(false);
   const [isIngestModalOpen, setIsIngestModalOpen] = useState(false);
 
@@ -83,7 +108,7 @@ export default function App() {
   const [toast, setToast] = useState<{ message: string; isError?: boolean; visible: boolean }>({
     message: 'Impostazioni salvate con successo.',
     isError: false,
-    visible: true, // Show initial toast as displayed in the screenshot!
+    visible: false,
   });
 
   // Automatically hide toast after timeout
@@ -164,13 +189,14 @@ export default function App() {
   };
 
   const handleSaveSettings = () => {
-    fetch(`${API_BASE_URL}/api/settings`, {
+    apiFetch(`/api/settings`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(settings),
+      body: JSON.stringify({ ...settings, apiToken: settings.apiToken || getApiToken() }),
     })
       .then((res) => {
         if (res.ok) {
+          setApiToken(settings.apiToken || getApiToken());
           showToast('Impostazioni salvate con successo.');
         } else {
           showToast('Errore durante il salvataggio delle impostazioni.', true);
@@ -179,18 +205,41 @@ export default function App() {
       .catch(() => showToast('Impossibile contattare il backend.', true));
   };
 
-  const handleResetSettings = () => {
-    setSettings(initialSettings);
-    applyThemeMode(initialSettings.themeMode);
-    showToast('Parametri reimpostati alle costanti di default Nexus.');
+  const handleResetSettings = async () => {
+    try {
+      const defaultsRes = await apiFetch(`/api/settings/defaults`);
+      if (!defaultsRes.ok) throw new Error(`HTTP ${defaultsRes.status}`);
+      const defaults = await defaultsRes.json();
+      const saveRes = await apiFetch(`/api/settings`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(defaults),
+      });
+      if (!saveRes.ok) throw new Error(`HTTP ${saveRes.status}`);
+      const saved = await saveRes.json();
+      setSettings((prev) => ({ ...prev, ...saved, apiToken: '' }));
+      applyThemeMode(saved.themeMode ?? initialSettings.themeMode);
+      showToast('Impostazioni ripristinate e salvate.');
+    } catch (error) {
+      showToast(`Impossibile ripristinare le impostazioni: ${error instanceof Error ? error.message : 'errore sconosciuto'}`, true);
+    }
   };
 
-  const handleTestConnections = () => {
-    showToast('FastAPI (200 OK) • LanceDB (Active) • Ollama (Ping 4ms)');
+  const handleTestConnections = async () => {
+    try {
+      const res = await apiFetch(`/api/health`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.detail || `HTTP ${res.status}`);
+      const status = (value: unknown) => value === true ? 'OK' : 'KO';
+      showToast(`FastAPI ${status(data.fastapi)} • LanceDB ${status(data.lancedb)} • Ollama ${status(data.ollama)}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Errore sconosciuto';
+      showToast(`Verifica connessioni fallita: ${message}`, true);
+    }
   };
 
   const handleRestartWorker = () => {
-    showToast('Invio segnale SIGHUP a FastAPI workers... Riavviati in 350ms.');
+    showToast('Configurazione e risorse RAG ricaricate nel processo FastAPI.');
   };
 
   const handleInspectChunk = (chunk: ChunkItem) => {
@@ -198,32 +247,10 @@ export default function App() {
     setIsChunkModalOpen(true);
   };
 
-  const handleIngestSuccess = (fileName: string, chunksCreated: number) => {
-    const newDoc: KnowledgeDocument = {
-      id: `doc-${Date.now()}`,
-      name: fileName,
-      type: fileName.endsWith('.md') ? 'Markdown' : fileName.endsWith('.yaml') ? 'YAML' : 'PDF',
-      fileSize: '1.2 MB',
-      chunksCount: chunksCreated,
-      sectionsCount: Math.round(chunksCreated / 18) + 1,
-      status: 'Indicizzato',
-      indexedDate: 'Adesso',
-      vectorTable: settings.tableName,
-      embeddingDim: 1024,
-      doclingAstNodes: chunksCreated + 140,
-    };
-    setDocuments((prev) => [newDoc, ...prev]);
-
-    // Also add a new log
-    const newLog: TelemetryLog = {
-      id: `log-${Date.now()}`,
-      timestamp: new Date().toLocaleTimeString(),
-      level: 'INFO',
-      component: 'Docling',
-      message: `Ingested "${fileName}" -> ${chunksCreated} chunks scritti in ${settings.tableName}`,
-      durationMs: 412,
-    };
-    setLogs((prev) => [newLog, ...prev]);
+  const handleIngestSuccess = (_fileName: string, _chunksCreated: number) => {
+    // Do not synthesize documents/logs locally. Refresh from the backend,
+    // which is the authoritative source for the active database state.
+    reloadData();
   };
 
   const handleClearLogs = () => {
@@ -237,7 +264,9 @@ export default function App() {
       <Sidebar
         activePage={activePage}
         onNavigate={(page) => setActivePage(page)}
-        chunksCount={14820}
+        chunksCount={chunksCount}
+        activeModel={settings.embeddingModel}
+        latencyMs={avgLatencyMs}
       />
 
       {/* Main App Canvas */}
@@ -272,6 +301,8 @@ export default function App() {
               chunks={chunks}
               onInspectChunk={handleInspectChunk}
               onShowToast={showToast}
+              globalSearch={searchFilter}
+              settings={settings}
             />
           )}
 
@@ -280,6 +311,10 @@ export default function App() {
               documents={documents}
               onShowToast={showToast}
               onOpenIngest={() => setIsIngestModalOpen(true)}
+              globalSearch={searchFilter}
+              chunksCount={chunksCount}
+              activeDatabaseName={activeDatabaseName}
+              storageBytes={storageBytes}
             />
           )}
 
@@ -288,6 +323,7 @@ export default function App() {
               chunks={chunks}
               onInspectChunk={handleInspectChunk}
               onShowToast={showToast}
+              globalSearch={searchFilter}
             />
           )}
 
@@ -295,7 +331,9 @@ export default function App() {
             <PipelineTelemetryView
               logs={logs}
               onClearLogs={handleClearLogs}
+              onLogsUpdate={setLogs}
               onShowToast={showToast}
+              globalSearch={searchFilter}
             />
           )}
 

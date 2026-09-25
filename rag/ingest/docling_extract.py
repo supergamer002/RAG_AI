@@ -46,7 +46,7 @@ def _ha_layer_testo(path_pdf: Path, soglia_caratteri: int = 200) -> bool:
     return len(testo) >= soglia_caratteri
 
 
-def _converti_pdf(path_pdf: Path):
+def _converti_pdf(path_pdf: Path, ocr_enabled: bool = True):
     """Esegue la conversione Docling. Isolata per poter essere mockata nei test."""
     import torch
 
@@ -57,7 +57,7 @@ def _converti_pdf(path_pdf: Path):
     from docling.datamodel.base_models import InputFormat
 
     opzioni = PdfPipelineOptions()
-    opzioni.do_ocr = not _ha_layer_testo(path_pdf)
+    opzioni.do_ocr = bool(ocr_enabled) and not _ha_layer_testo(path_pdf)
 
     converter = DocumentConverter(
         format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=opzioni)}
@@ -127,6 +127,9 @@ def ingest_pdf(
     path_pdf: Path,
     tipo_fonte: TipoFonte,
     fonte_titolo: str | None = None,
+    target_token: int = 600,
+    overlap_ratio: float = 0.12,
+    ocr_enabled: bool = True,
 ) -> list[Chunk]:
     """Estrae un PDF con Docling e lo trasforma in chunk RAG.
 
@@ -134,7 +137,7 @@ def ingest_pdf(
     provenienza (data/libri/ vs data/articoli/) lo determina a monte, vedi
     ingest_cartella.
     """
-    doc = _converti_pdf(path_pdf)
+    doc = _converti_pdf(path_pdf, ocr_enabled=ocr_enabled)
     sezioni = _estrai_sezioni(doc)
     titolo = fonte_titolo or path_pdf.stem.replace("_", " ")
 
@@ -143,14 +146,30 @@ def ingest_pdf(
         fonte_titolo=titolo,
         tipo_fonte=tipo_fonte,
         fonte_path=str(path_pdf),
+        target_token=target_token,
+        overlap_ratio=overlap_ratio,
     )
 
 
-def ingest_cartella(cartella: Path, tipo_fonte: TipoFonte) -> list[Chunk]:
+def ingest_cartella(
+    cartella: Path,
+    tipo_fonte: TipoFonte,
+    target_token: int = 600,
+    overlap_ratio: float = 0.12,
+    ocr_enabled: bool = True,
+) -> list[Chunk]:
     """Applica ingest_pdf a tutti i PDF di una cartella (es. data/articoli/)."""
     chunks: list[Chunk] = []
     for path_pdf in sorted(cartella.glob("*.pdf")):
-        chunks.extend(ingest_pdf(path_pdf, tipo_fonte))
+        chunks.extend(
+            ingest_pdf(
+                path_pdf,
+                tipo_fonte,
+                target_token=target_token,
+                overlap_ratio=overlap_ratio,
+                ocr_enabled=ocr_enabled,
+            )
+        )
     return chunks
 
 

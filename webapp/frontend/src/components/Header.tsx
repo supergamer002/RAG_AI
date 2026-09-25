@@ -1,3 +1,4 @@
+import { apiFetch, apiJson, apiUrl, getApiToken, setApiToken } from '../api';
 import React, { useState, useEffect } from 'react';
 import { ThemeMode } from '../types';
 
@@ -30,7 +31,7 @@ export const Header: React.FC<HeaderProps> = ({
 
   useEffect(() => {
     const checkHealth = () => {
-      fetch(`${API_BASE_URL}/api/health`)
+      apiFetch(`/api/health`)
         .then((res) => res.ok ? res.json() : null)
         .then((data) => {
           if (data) {

@@ -1,5 +1,6 @@
+import { apiFetch, apiJson, apiUrl, getApiToken, setApiToken } from '../api';
 import React, { useState } from 'react';
-import { ChunkItem } from '../types';
+import { AppSettings, ChunkItem } from '../types';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
@@ -7,16 +8,18 @@ interface QueryWorkbenchViewProps {
   chunks: ChunkItem[];
   onInspectChunk: (chunk: ChunkItem) => void;
   onShowToast: (msg: string, isError?: boolean) => void;
+  globalSearch?: string;
+  settings: AppSettings;
 }
 
 export const QueryWorkbenchView: React.FC<QueryWorkbenchViewProps> = ({
   chunks,
   onInspectChunk,
   onShowToast,
+  globalSearch = '',
+  settings,
 }) => {
-  const [query, setQuery] = useState(
-    'Come viene gestita la concorrenza asincrona tra FastAPI e LanceDB?'
-  );
+  const [query, setQuery] = useState('');
   const [searchMode, setSearchMode] = useState<'hybrid' | 'dense' | 'sparse'>('hybrid');
   const [hybridAlpha, setHybridAlpha] = useState(0.7);
   const [enableRerank, setEnableRerank] = useState(true);
@@ -24,25 +27,28 @@ export const QueryWorkbenchView: React.FC<QueryWorkbenchViewProps> = ({
   const [hasExecuted, setHasExecuted] = useState(false);
   const [realAnswer, setRealAnswer] = useState<string>('');
   const [realChunks, setRealChunks] = useState<ChunkItem[]>(chunks);
+  const [lastQueryDurationMs, setLastQueryDurationMs] = useState<number | null>(null);
 
-  const sampleQueries = [
-    'Come viene gestita la concorrenza asincrona tra FastAPI e LanceDB?',
-    'Quali sono le proprietà dell\'indice IVF-PQ su dischi NVMe?',
-    'In che modo Docling estrae tabelle complesse senza frammentarle?',
-    'Come funziona il lock di VRAM a 300s su Ollama per nomic-embed-text?',
-  ];
+  const visibleChunks = (realChunks.length > 0 ? realChunks : chunks).filter((chk) => {
+    const term = globalSearch.trim().toLowerCase();
+    if (!term) return true;
+    return [chk.id, chk.docTitle, chk.section, chk.text, chk.highlightSnippet, chk.embeddingModel, chk.cluster]
+      .some((value) => String(value ?? '').toLowerCase().includes(term));
+  });
+
 
   const handleRunQuery = () => {
     if (!query.trim()) return;
     setIsExecuting(true);
+    const startedAt = performance.now();
 
-    fetch(`${API_BASE_URL}/api/query`, {
+    apiFetch(`/api/query`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         query,
-        topK: 20,
-        topN: 6,
+        topK: settings.topKCandidates,
+        topN: settings.topNRerank,
         searchMode,
         hybridAlpha,
         enableRerank,
@@ -54,6 +60,7 @@ export const QueryWorkbenchView: React.FC<QueryWorkbenchViewProps> = ({
       })
       .then((data) => {
         setIsExecuting(false);
+        setLastQueryDurationMs(performance.now() - startedAt);
         setHasExecuted(true);
         setRealAnswer(data.answer);
         if (data.chunks && Array.isArray(data.chunks)) {
@@ -63,7 +70,8 @@ export const QueryWorkbenchView: React.FC<QueryWorkbenchViewProps> = ({
       })
       .catch(() => {
         setIsExecuting(false);
-        onShowToast('Impossibile eseguire la query sul backend, dati di fallback visibili.', true);
+        setLastQueryDurationMs(null);
+        onShowToast('Impossibile eseguire la query sul backend.', true);
       });
   };
 
@@ -92,7 +100,7 @@ export const QueryWorkbenchView: React.FC<QueryWorkbenchViewProps> = ({
 
         <div className="flex items-center gap-2">
           <span className="font-mono text-[11px] text-[#4cd7f6] bg-[#06b6d4]/15 px-3 py-1.5 rounded-lg border border-[#06b6d4]/30">
-            Pipeline: 24.8ms avg
+            {lastQueryDurationMs == null ? 'Pipeline: —' : `Pipeline: ${lastQueryDurationMs.toFixed(1)}ms`}
           </span>
         </div>
       </div>
@@ -125,23 +133,6 @@ export const QueryWorkbenchView: React.FC<QueryWorkbenchViewProps> = ({
             </span>
             <span>{isExecuting ? 'Elaborazione...' : 'Esegui Query'}</span>
           </button>
-        </div>
-
-        {/* Suggestion Chips */}
-        <div className="flex flex-wrap items-center gap-2 pt-1">
-          <span className="font-mono text-[11px] text-[#bcc9cd]">Query di prova:</span>
-          {sampleQueries.map((sq, i) => (
-            <button
-              key={i}
-              onClick={() => {
-                setQuery(sq);
-                setTimeout(handleRunQuery, 50);
-              }}
-              className="text-[11px] font-mono text-[#bcc9cd] hover:text-[#4cd7f6] bg-[#0a0e18] hover:bg-[#1c1f2a] px-2.5 py-1 rounded border border-[#262a35] transition-colors truncate max-w-xs cursor-pointer"
-            >
-              {sq}
-            </button>
-          ))}
         </div>
 
         {/* Search Parameter Controls */}
@@ -201,7 +192,7 @@ export const QueryWorkbenchView: React.FC<QueryWorkbenchViewProps> = ({
                 Cross-Encoder Rerank
               </span>
               <span className="font-mono text-[10px] text-[#bcc9cd]">
-                ms-marco-MiniLM-L-6-v2
+                {settings.crossEncoderModel}
               </span>
             </div>
             <label className="relative inline-flex items-center cursor-pointer">
@@ -217,40 +208,17 @@ export const QueryWorkbenchView: React.FC<QueryWorkbenchViewProps> = ({
         </div>
       </div>
 
-      {/* Latency Waterfall Banner */}
+      {/* Query latency: only measured end-to-end duration is shown. */}
       <div className="bg-[#171b26] p-4 rounded-xl border border-[#262a35] flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-2">
           <span className="material-symbols-outlined text-[#4cd7f6] text-[18px]">timer</span>
           <span className="font-mono text-[11px] text-[#dfe2f1] font-semibold">
-            Pipeline Execution Breakdown:
+            Durata query misurata:
           </span>
         </div>
-
-        <div className="flex flex-wrap items-center gap-4 text-[11px] font-mono">
-          <div className="flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-full bg-[#bcc9cd]" />
-            <span className="text-[#bcc9cd]">Tokenizer:</span>
-            <span className="text-[#dfe2f1]">1.8ms</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-full bg-[#4cd7f6]" />
-            <span className="text-[#bcc9cd]">Ollama Embedding:</span>
-            <span className="text-[#4cd7f6]">11.2ms</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-full bg-[#c0c1ff]" />
-            <span className="text-[#bcc9cd]">LanceDB Scan:</span>
-            <span className="text-[#c0c1ff]">3.4ms</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-full bg-[#d0bcff]" />
-            <span className="text-[#bcc9cd]">Cross-Encoder:</span>
-            <span className="text-[#d0bcff]">8.4ms</span>
-          </div>
-          <div className="px-2 py-0.5 rounded bg-[#4cd7f6]/20 text-[#4cd7f6] font-bold border border-[#4cd7f6]/30">
-            Totale: 24.8ms
-          </div>
-        </div>
+        <span className="font-mono text-[11px] text-[#4cd7f6] font-bold">
+          {lastQueryDurationMs == null ? '—' : `${lastQueryDurationMs.toFixed(1)} ms`}
+        </span>
       </div>
 
       {/* Main Results Grid */}
@@ -273,7 +241,7 @@ export const QueryWorkbenchView: React.FC<QueryWorkbenchViewProps> = ({
             </div>
 
             <div className="flex flex-col gap-3">
-              {(realChunks.length > 0 ? realChunks : chunks).map((chk, idx) => (
+              {visibleChunks.map((chk, idx) => (
                 <div
                   key={chk.id}
                   className="bg-[#171b26] p-4 rounded-xl border border-[#262a35] hover:border-[#4cd7f6]/50 transition-all flex flex-col gap-2.5 shadow-sm group"
@@ -329,10 +297,6 @@ export const QueryWorkbenchView: React.FC<QueryWorkbenchViewProps> = ({
               <span className="text-[16px] text-[#dfe2f1] font-semibold">
                 Risposta Sintetizzata dal Generatore
               </span>
-              <span className="font-mono text-[11px] text-[#10b981] flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-[#10b981]" />
-                68 tok/s
-              </span>
             </div>
 
             <div className="bg-[#171b26] p-5 rounded-xl border border-[#262a35] shadow-md flex flex-col gap-4 sticky top-24">
@@ -345,7 +309,7 @@ export const QueryWorkbenchView: React.FC<QueryWorkbenchViewProps> = ({
                     Grounded Generator (Ollama / Local LLM)
                   </span>
                 </div>
-                <span className="font-mono text-[10px] text-[#bcc9cd]">Temp: 0.1</span>
+
               </div>
 
               <div className="text-[13px] text-[#dfe2f1] leading-relaxed flex flex-col gap-3 font-sans whitespace-pre-line">

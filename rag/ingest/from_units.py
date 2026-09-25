@@ -41,7 +41,11 @@ def carica_unita(path_json: Path) -> list[dict]:
     return unita
 
 
-def ingest_file_unita(path_json: Path) -> list[Chunk]:
+def ingest_file_unita(
+    path_json: Path,
+    target_token: int = 600,
+    overlap_ratio: float = 0.12,
+) -> list[Chunk]:
     """Converte un singolo file di unita' tematiche (un libro) in chunk RAG."""
     if path_json.name in FILE_ESCLUSI:
         return []
@@ -60,14 +64,26 @@ def ingest_file_unita(path_json: Path) -> list[Chunk]:
         fonte_titolo=fonte_titolo,
         tipo_fonte=TipoFonte.LIBRO,
         fonte_path=str(path_json),
+        target_token=target_token,
+        overlap_ratio=overlap_ratio,
     )
 
 
-def ingest_cartella_unita(cartella: Path) -> list[Chunk]:
+def ingest_cartella_unita(
+    cartella: Path,
+    target_token: int = 600,
+    overlap_ratio: float = 0.12,
+) -> list[Chunk]:
     """Applica ingest_file_unita a tutti i JSON di una cartella."""
     chunks: list[Chunk] = []
     for path_json in sorted(cartella.glob("*.json")):
-        chunks.extend(ingest_file_unita(path_json))
+        chunks.extend(
+            ingest_file_unita(
+                path_json,
+                target_token=target_token,
+                overlap_ratio=overlap_ratio,
+            )
+        )
     return chunks
 
 

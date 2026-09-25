@@ -1,3 +1,4 @@
+import { apiFetch, apiJson, apiUrl, getApiToken, setApiToken } from '../api';
 import React, { useState, useEffect } from 'react';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
@@ -31,7 +32,7 @@ export const DatabaseManagerModal: React.FC<DatabaseManagerModalProps> = ({
   const [isCreating, setIsCreating] = useState(false);
 
   const fetchDatabases = () => {
-    fetch(`${API_BASE_URL}/api/databases`)
+    apiFetch(`/api/databases`)
       .then((res) => res.ok ? res.json() : null)
       .then((data) => {
         if (data) {
@@ -54,7 +55,7 @@ export const DatabaseManagerModal: React.FC<DatabaseManagerModalProps> = ({
     if (!newDbName.trim()) return;
     setIsCreating(true);
 
-    fetch(`${API_BASE_URL}/api/databases`, {
+    apiFetch(`/api/databases`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: newDbName.trim() }),
@@ -76,7 +77,7 @@ export const DatabaseManagerModal: React.FC<DatabaseManagerModalProps> = ({
   };
 
   const handleActivate = (dbId: string, name: string) => {
-    fetch(`${API_BASE_URL}/api/databases/${dbId}/activate`, {
+    apiFetch(`/api/databases/${dbId}/activate`, {
       method: 'POST',
     })
       .then((res) => {
@@ -98,7 +99,7 @@ export const DatabaseManagerModal: React.FC<DatabaseManagerModalProps> = ({
     const updated = prompt('Nuovo nome per il database:', currentName);
     if (!updated || !updated.trim() || updated.trim() === currentName) return;
 
-    fetch(`${API_BASE_URL}/api/databases/${dbId}`, {
+    apiFetch(`/api/databases/${dbId}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: updated.trim() }),
@@ -116,18 +117,41 @@ export const DatabaseManagerModal: React.FC<DatabaseManagerModalProps> = ({
       });
   };
 
-  const handleExport = (dbId: string, name: string) => {
-    window.open(`${API_BASE_URL}/api/databases/${dbId}/export`, '_blank');
-    onShowToast(`Esportazione avviata per "${name}".`);
+  const handleExport = async (dbId: string, name: string) => {
+    try {
+      const res = await apiFetch(`/api/databases/${dbId}/export`);
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.detail || `HTTP ${res.status}`);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `database_${dbId}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      onShowToast(`Database "${name}" esportato.`);
+    } catch (err) {
+      onShowToast(`Impossibile esportare: ${err instanceof Error ? err.message : 'errore sconosciuto'}`, true);
+    }
   };
 
   const handleImportFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || !e.target.files[0]) return;
     const file = e.target.files[0];
+    const chosenName = prompt('Nome del database importato:', file.name.replace(/\.zip$/i, ''));
+    if (!chosenName || !chosenName.trim()) {
+      e.target.value = '';
+      return;
+    }
     const formData = new FormData();
     formData.append('file', file);
+    formData.append('name', chosenName.trim());
 
-    fetch(`${API_BASE_URL}/api/databases/import`, {
+    apiFetch(`/api/databases/import`, {
       method: 'POST',
       body: formData,
     })
@@ -147,7 +171,7 @@ export const DatabaseManagerModal: React.FC<DatabaseManagerModalProps> = ({
   const handleDelete = (dbId: string, name: string) => {
     if (!confirm(`Sei sicuro di voler eliminare il database "${name}"?`)) return;
 
-    fetch(`${API_BASE_URL}/api/databases/${dbId}`, {
+    apiFetch(`/api/databases/${dbId}`, {
       method: 'DELETE',
     })
       .then((res) => {

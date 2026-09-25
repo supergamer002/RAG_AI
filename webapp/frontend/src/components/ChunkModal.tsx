@@ -1,3 +1,4 @@
+import { apiFetch, apiJson, apiUrl, getApiToken, setApiToken } from '../api';
 import React, { useState } from 'react';
 import { ChunkItem } from '../types';
 
@@ -41,7 +42,7 @@ export const ChunkModal: React.FC<ChunkModalProps> = ({
 
   const handleToggleVector = () => {
     if (!showVectorRaw && realVector.length === 0) {
-      fetch(`${API_BASE_URL}/api/chunks/${chunk.id}/vector`)
+      apiFetch(`/api/chunks/${chunk.id}/vector`)
         .then((res) => res.ok ? res.json() : null)
         .then((data) => {
           if (data && data.vector) {
@@ -115,7 +116,7 @@ export const ChunkModal: React.FC<ChunkModalProps> = ({
                 Estratto Completo del Chunk
               </span>
               <span className="font-mono text-[11px] text-[#4cd7f6]">
-                {chunk.tokenCount} Tokens (Sovrapposizione {chunk.overlapPct}%)
+                {chunk.tokenCount} Tokens{chunk.overlapPct == null ? '' : ` (Sovrapposizione ${chunk.overlapPct}%)`}
               </span>
             </div>
 
@@ -128,13 +129,13 @@ export const ChunkModal: React.FC<ChunkModalProps> = ({
               <div className="mt-2 bg-[#0a0e18] p-3 rounded-lg border border-[#4cd7f6]/40 flex flex-col gap-2">
                 <div className="flex items-center justify-between text-[11px] font-mono">
                   <span className="text-[#4cd7f6] font-semibold">
-                    Visualizzazione Spazio Vettoriale Reale LanceDB (1024-dim float32)
+                    Visualizzazione Spazio Vettoriale Reale LanceDB
                   </span>
                   <span className="text-[#bcc9cd]">{realVector.length > 0 ? `${realVector.length} dims caricate` : 'Caricamento...'}</span>
                 </div>
                 {/* Visual heat strip */}
-                <div className="grid grid-cols-16 sm:grid-cols-32 gap-1 py-1">
-                  {(realVector.length > 0 ? realVector.slice(0, 64) : Array.from({ length: 64 }, () => 0.1)).map((val, idx) => {
+                {realVector.length > 0 && <div className="grid grid-cols-16 sm:grid-cols-32 gap-1 py-1">
+                  {realVector.slice(0, 64).map((val, idx) => {
                     const norm = Math.min(Math.max((val + 0.5) / 1.0, 0), 1);
                     return (
                       <div
@@ -147,9 +148,9 @@ export const ChunkModal: React.FC<ChunkModalProps> = ({
                       />
                     );
                   })}
-                </div>
+                </div>}
                 <div className="font-mono text-[10px] text-[#bcc9cd] max-h-20 overflow-y-auto bg-[#171b26] p-2 rounded border border-[#262a35] break-all">
-                  [{realVector.length > 0 ? realVector.join(', ') : 'Caricamento vettore reale...'}, ...]
+                  {realVector.length > 0 ? `[${realVector.join(', ')}]` : 'Vettore non disponibile.'}
                 </div>
               </div>
             )}
@@ -164,7 +165,7 @@ export const ChunkModal: React.FC<ChunkModalProps> = ({
             <div className="flex flex-col gap-1.5 font-mono text-[11px]">
               <div className="flex justify-between py-1.5 px-2 bg-[#1c1f2a]/60 rounded border border-[#262a35]/40">
                 <span className="text-[#bcc9cd]">Tabella LanceDB:</span>
-                <span className="text-[#4cd7f6] font-medium">rag_chunks</span>
+                <span className="text-[#4cd7f6] font-medium">{chunk.vectorTable ?? '—'}</span>
               </div>
               <div className="flex justify-between py-1.5 px-2 bg-[#1c1f2a]/60 rounded border border-[#262a35]/40">
                 <span className="text-[#bcc9cd]">Embedding Model:</span>
@@ -180,11 +181,11 @@ export const ChunkModal: React.FC<ChunkModalProps> = ({
               </div>
               <div className="flex justify-between py-1.5 px-2 bg-[#1c1f2a]/60 rounded border border-[#262a35]/40">
                 <span className="text-[#bcc9cd]">Docling Parser:</span>
-                <span className="text-[#4cd7f6] font-medium">PDF Struct v2.4</span>
+                <span className="text-[#4cd7f6] font-medium">{chunk.parser ?? '—'}</span>
               </div>
               <div className="flex justify-between py-1.5 px-2 bg-[#1c1f2a]/60 rounded border border-[#262a35]/40">
                 <span className="text-[#bcc9cd]">Timestamp Ingest:</span>
-                <span className="text-[#dfe2f1] font-medium">{chunk.timestamp}</span>
+                <span className="text-[#dfe2f1] font-medium">{chunk.timestamp || '—'}</span>
               </div>
               <div className="flex justify-between py-1.5 px-2 bg-[#1c1f2a]/60 rounded border border-[#262a35]/40">
                 <span className="text-[#bcc9cd]">Cross-Score:</span>

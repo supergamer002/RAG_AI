@@ -139,13 +139,21 @@ def chunk_documento(
     tipo_fonte: TipoFonte,
     fonte_path: str = "",
     lingua: str = "it",
+    target_token: int = TARGET_TOKEN,
+    overlap_ratio: float = OVERLAP_RATIO,
 ) -> list[Chunk]:
     """Applica chunk_sezione a tutte le sezioni di un documento."""
     chunks: list[Chunk] = []
     for sezione in sezioni:
         chunks.extend(
             chunk_sezione(
-                sezione, fonte_titolo, tipo_fonte, fonte_path, lingua
+                sezione,
+                fonte_titolo,
+                tipo_fonte,
+                fonte_path,
+                lingua,
+                target_token=target_token,
+                overlap_ratio=overlap_ratio,
             )
         )
     return chunks

@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import { apiFetch, apiJson, apiUrl, getApiToken, setApiToken } from '../api';
+import React, { useEffect, useState } from 'react';
 import { EvalMetric } from '../types';
 
 interface EvaluationsViewProps {
@@ -11,43 +12,18 @@ export const EvaluationsView: React.FC<EvaluationsViewProps> = ({
   onShowToast,
 }) => {
   const [isRunningEval, setIsRunningEval] = useState(false);
+  const [liveMetrics, setLiveMetrics] = useState<EvalMetric[]>(metrics);
+  const [testCases, setTestCases] = useState<any[]>([]);
 
-  const testCases = [
-    {
-      id: 'tc-1',
-      query: 'Come si configura il lock della memoria VRAM in Ollama?',
-      expectedDoc: 'Ollama_Local_Inference_VRAM_Benchmark.md',
-      score: 0.98,
-      status: 'Passed',
-    },
-    {
-      id: 'tc-2',
-      query: 'Qual è il numero di centroidi Voronoi raccomandato in LanceDB?',
-      expectedDoc: 'LanceDB_IVF_PQ_Quantization_Whitepaper.pdf',
-      score: 0.96,
-      status: 'Passed',
-    },
-    {
-      id: 'tc-3',
-      query: 'In che modo Docling gestisce il chunking semantico senza tagliare tabelle?',
-      expectedDoc: 'Docling_Layout_AST_Specification.pdf',
-      score: 0.94,
-      status: 'Passed',
-    },
-    {
-      id: 'tc-4',
-      query: 'Come funziona l\'integrazione tra threadpool UVicorn e libuv?',
-      expectedDoc: 'FastAPI_Uvicorn_Orchestration_Guide.md',
-      score: 0.95,
-      status: 'Passed',
-    },
-  ];
+  useEffect(() => {
+    setLiveMetrics(metrics);
+  }, [metrics]);
 
   const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
   const handleRunSuite = () => {
     setIsRunningEval(true);
-    fetch(`${API_BASE_URL}/api/eval/run`, { method: 'POST' })
+    apiFetch(`/api/eval/run`, { method: 'POST' })
       .then((res) => {
         if (!res.ok) throw new Error('Errore avvio benchmark');
         return res.json();
@@ -55,16 +31,34 @@ export const EvaluationsView: React.FC<EvaluationsViewProps> = ({
       .then((data) => {
         const jobId = data.jobId;
         const interval = setInterval(() => {
-          fetch(`${API_BASE_URL}/api/eval/status/${jobId}`)
-            .then((res) => res.ok ? res.json() : null)
+          apiFetch(`/api/eval/status/${jobId}`)
+            .then(async (res) => {
+              const statusData = await res.json().catch(() => null);
+              if (!res.ok) throw new Error(statusData?.detail || `HTTP ${res.status}`);
+              return statusData;
+            })
             .then((statusData) => {
-              if (statusData && statusData.status === 'completed') {
+              if (statusData && ['completed', 'completed_with_errors', 'failed'].includes(statusData.status)) {
                 clearInterval(interval);
                 setIsRunningEval(false);
-                onShowToast('Suite di valutazione Ragas completata! Score medio: 94.8% (+0.6%)');
+                if (Array.isArray(statusData.results)) {
+                  // Le metriche arrivano dal backend e rappresentano l'ultima esecuzione reale.
+                  if (Array.isArray(statusData.results)) setLiveMetrics(statusData.results);
+                  onShowToast(
+                    statusData.status === 'failed'
+                      ? `Valutazione non completata: ${statusData.error || 'errore sconosciuto'}`
+                      : `Valutazione completata: ${statusData.results.length} metriche calcolate${statusData.error ? ` (${statusData.error})` : ''}.`,
+                    statusData.status === 'failed'
+                  );
+                }
+                if (Array.isArray(statusData.testCases)) setTestCases(statusData.testCases);
               }
             })
-            .catch(() => {});
+            .catch((err) => {
+              clearInterval(interval);
+              setIsRunningEval(false);
+              onShowToast(`Errore nel monitoraggio benchmark: ${err instanceof Error ? err.message : 'errore sconosciuto'}`, true);
+            });
         }, 800);
       })
       .catch((err) => {
@@ -83,15 +77,15 @@ export const EvaluationsView: React.FC<EvaluationsViewProps> = ({
           </div>
           <div className="flex flex-col">
             <div className="flex items-center gap-1.5 font-mono text-[11px] text-[#4cd7f6] uppercase tracking-wider">
-              <span>Quality Assurance &amp; Triad Benchmarks</span>
+              <span>Quality Assurance &amp; RAG Benchmark</span>
               <span>•</span>
-              <span className="text-[#bcc9cd]">RAGAS_SUITE</span>
+              <span className="text-[#bcc9cd]">RAG_EVAL</span>
             </div>
             <h1 className="text-[24px] sm:text-[28px] text-[#dfe2f1] tracking-tight font-semibold">
-              RAG Quality Evaluations &amp; Triad
+              RAG Quality Evaluations
             </h1>
             <p className="text-[13px] text-[#bcc9cd]">
-              Valutazione automatizzata su fedeltà di recupero, assenza di allucinazioni e allineamento semantico della sintesi.
+              Valutazione automatizzata basata su retrieval reale, similarità query-risposta e giudizio LLM sulla fedeltà al contesto.
             </p>
           </div>
         </div>
@@ -109,19 +103,19 @@ export const EvaluationsView: React.FC<EvaluationsViewProps> = ({
       </div>
 
       {/* Metrics Grid or Clean Empty State */}
-      {metrics.length === 0 ? (
+      {liveMetrics.length === 0 ? (
         <div className="bg-[#171b26] p-12 rounded-xl border border-[#262a35] shadow-md flex flex-col items-center justify-center text-center gap-3">
           <span className="material-symbols-outlined text-[#4cd7f6] text-[48px] opacity-60">
             analytics
           </span>
           <h3 className="text-[18px] text-[#dfe2f1] font-semibold">Nessun Test di Valutazione Eseguito</h3>
           <p className="text-[13px] text-[#bcc9cd] max-w-lg">
-            Il modulo di valutazione automatica (golden set + recall@k) non e&apos; ancora stato generato. Gli endpoint di valutazione restituiranno dati reali una volta completato il benchmark.
+            Nessuna valutazione eseguita. Avvia il benchmark per eseguire realmente le query sul database attivo e calcolare le metriche.
           </p>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {metrics.map((m) => (
+          {liveMetrics.map((m) => (
             <div
               key={m.id}
               className="bg-[#171b26] p-5 rounded-xl border border-[#262a35] shadow-md flex flex-col justify-between gap-3"
@@ -161,9 +155,9 @@ export const EvaluationsView: React.FC<EvaluationsViewProps> = ({
       <div className="bg-[#171b26] rounded-xl border border-[#262a35] overflow-hidden shadow-md flex flex-col">
         <div className="p-4 bg-[#0a0e18] border-b border-[#262a35] flex items-center justify-between">
           <span className="text-[14px] text-[#dfe2f1] font-semibold">
-            Test Case di Validazione Automatica (4 query campionate)
+            Test Case di Validazione Automatica
           </span>
-          <span className="font-mono text-[11px] text-[#4cd7f6]">Status: 4/4 Passed</span>
+          <span className="font-mono text-[11px] text-[#4cd7f6]">Status: {testCases.length ? `${testCases.filter((tc) => tc.status === 'Found').length}/${testCases.length} documenti ground-truth trovati` : 'Nessuna esecuzione'}</span>
         </div>
 
         <div className="overflow-x-auto">
@@ -173,12 +167,14 @@ export const EvaluationsView: React.FC<EvaluationsViewProps> = ({
                 <th className="py-3 px-4">ID</th>
                 <th className="py-3 px-4">Domanda di Test</th>
                 <th className="py-3 px-4">Documento Ground Truth</th>
-                <th className="py-3 px-4">Ragas Match</th>
+                <th className="py-3 px-4">Retrieval Match</th>
                 <th className="py-3 px-4 text-right">Esito</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[#262a35]">
-              {testCases.map((tc) => (
+              {testCases.length === 0 ? (
+                <tr><td colSpan={5} className="py-8 px-4 text-center text-[#bcc9cd]">Nessuna suite eseguita.</td></tr>
+              ) : testCases.map((tc) => (
                 <tr key={tc.id} className="hover:bg-[#1c1f2a]/60 transition-colors">
                   <td className="py-3 px-4 font-mono text-[#bcc9cd]">{tc.id}</td>
                   <td className="py-3 px-4 font-medium text-[#dfe2f1] font-sans">{tc.query}</td>
@@ -186,11 +182,11 @@ export const EvaluationsView: React.FC<EvaluationsViewProps> = ({
                     {tc.expectedDoc}
                   </td>
                   <td className="py-3 px-4 font-mono text-[#4cd7f6] font-semibold">
-                    {(tc.score * 100).toFixed(1)}%
+                    {typeof tc.retrievalMatch === 'number' ? `${(tc.retrievalMatch * 100).toFixed(1)}%` : '—'}
                   </td>
                   <td className="py-3 px-4 text-right font-mono">
-                    <span className="px-2 py-0.5 rounded text-[10px] bg-[#10b981]/15 text-[#10b981] border border-[#10b981]/30">
-                      ✓ {tc.status}
+                    <span className={`px-2 py-0.5 rounded text-[10px] border ${tc.status === 'Found' ? 'bg-[#10b981]/15 text-[#10b981] border-[#10b981]/30' : tc.status === 'Error' ? 'bg-red-500/15 text-red-400 border-red-500/30' : 'bg-yellow-500/15 text-yellow-300 border-yellow-500/30'}`}>
+                      {tc.status === 'Found' ? '✓' : tc.status === 'Error' ? '!' : '•'} {tc.status}
                     </span>
                   </td>
                 </tr>
