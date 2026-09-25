@@ -6,7 +6,7 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000
 interface QueryWorkbenchViewProps {
   chunks: ChunkItem[];
   onInspectChunk: (chunk: ChunkItem) => void;
-  onShowToast: (msg: string) => void;
+  onShowToast: (msg: string, isError?: boolean) => void;
 }
 
 export const QueryWorkbenchView: React.FC<QueryWorkbenchViewProps> = ({

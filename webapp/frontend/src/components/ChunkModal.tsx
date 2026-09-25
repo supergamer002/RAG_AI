@@ -5,7 +5,7 @@ interface ChunkModalProps {
   chunk: ChunkItem | null;
   isOpen: boolean;
   onClose: () => void;
-  onShowToast: (msg: string) => void;
+  onShowToast: (msg: string, isError?: boolean) => void;
 }
 
 export const ChunkModal: React.FC<ChunkModalProps> = ({

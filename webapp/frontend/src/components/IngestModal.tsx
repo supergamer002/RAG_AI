@@ -6,7 +6,7 @@ interface IngestModalProps {
   isOpen: boolean;
   onClose: () => void;
   onIngestSuccess: (filename: string, chunksCreated: number) => void;
-  onShowToast: (msg: string) => void;
+  onShowToast: (msg: string, isError?: boolean) => void;
 }
 
 export const IngestModal: React.FC<IngestModalProps> = ({
@@ -16,6 +16,7 @@ export const IngestModal: React.FC<IngestModalProps> = ({
   onShowToast,
 }) => {
   const [selectedFile, setSelectedFile] = useState<string>('Specifiche_Tecniche_LanceDB_v0.12.pdf');
+  const [fileObject, setFileObject] = useState<File | null>(null);
   const [ocrEnabled, setOcrEnabled] = useState(true);
   const [chunkTokens, setChunkTokens] = useState(512);
   const [overlapPct, setOverlapPct] = useState(15);
@@ -23,8 +24,6 @@ export const IngestModal: React.FC<IngestModalProps> = ({
   const [step, setStep] = useState<string>('');
 
   if (!isOpen) return null;
-
-  const [fileObject, setFileObject] = useState<File | null>(null);
 
   const handleStartIngest = () => {
     setIsProcessing(true);
