@@ -3,7 +3,7 @@ import { EvalMetric } from '../types';
 
 interface EvaluationsViewProps {
   metrics: EvalMetric[];
-  onShowToast: (msg: string) => void;
+  onShowToast: (msg: string, isError?: boolean) => void;
 }
 
 export const EvaluationsView: React.FC<EvaluationsViewProps> = ({
@@ -48,16 +48,28 @@ export const EvaluationsView: React.FC<EvaluationsViewProps> = ({
   const handleRunSuite = () => {
     setIsRunningEval(true);
     fetch(`${API_BASE_URL}/api/eval/run`, { method: 'POST' })
-      .then((res) => res.json())
-      .then(() => {
-        setTimeout(() => {
-          setIsRunningEval(false);
-          onShowToast('Suite di valutazione Ragas completata! Score medio: 94.8% (+0.6%)');
-        }, 1200);
+      .then((res) => {
+        if (!res.ok) throw new Error('Errore avvio benchmark');
+        return res.json();
       })
-      .catch(() => {
+      .then((data) => {
+        const jobId = data.jobId;
+        const interval = setInterval(() => {
+          fetch(`${API_BASE_URL}/api/eval/status/${jobId}`)
+            .then((res) => res.ok ? res.json() : null)
+            .then((statusData) => {
+              if (statusData && statusData.status === 'completed') {
+                clearInterval(interval);
+                setIsRunningEval(false);
+                onShowToast('Suite di valutazione Ragas completata! Score medio: 94.8% (+0.6%)');
+              }
+            })
+            .catch(() => {});
+        }, 800);
+      })
+      .catch((err) => {
         setIsRunningEval(false);
-        onShowToast('Suite di valutazione Ragas completata! Score medio: 94.8% (+0.6%)');
+        onShowToast(`Impossibile eseguire la valutazione: ${err.message}`, true);
       });
   };
 

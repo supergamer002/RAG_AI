@@ -4,7 +4,7 @@ import { ChunkItem } from '../types';
 interface VectorExplorerViewProps {
   chunks: ChunkItem[];
   onInspectChunk: (chunk: ChunkItem) => void;
-  onShowToast: (msg: string) => void;
+  onShowToast: (msg: string, isError?: boolean) => void;
 }
 
 export const VectorExplorerView: React.FC<VectorExplorerViewProps> = ({
@@ -26,17 +26,20 @@ export const VectorExplorerView: React.FC<VectorExplorerViewProps> = ({
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ method: alg.toLowerCase(), sampleSize: 500 }),
     })
-      .then((res) => res.ok ? res.json() : null)
+      .then((res) => {
+        if (!res.ok) throw new Error('Errore nel calcolo della proiezione');
+        return res.json();
+      })
       .then((data) => {
         if (data && Array.isArray(data.points) && data.points.length > 0) {
           setProjectedPoints(data.points);
           onShowToast(`Proiezione vettoriale reale ${alg} calcolata per ${data.points.length} punti.`);
         } else {
-          onShowToast(`Proiezione vettoriale ricalcolata con algoritmo ${alg}.`);
+          onShowToast(`Proiezione vettoriale ${alg} completata.`);
         }
       })
-      .catch(() => {
-        onShowToast(`Proiezione vettoriale ricalcolata con algoritmo ${alg}.`);
+      .catch((err) => {
+        onShowToast(`Impossibile ricalcolare la proiezione: ${err.message}`, true);
       });
   };
 

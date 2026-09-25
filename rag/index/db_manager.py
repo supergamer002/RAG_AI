@@ -40,11 +40,11 @@ class DatabaseManager:
             except Exception:
                 pass
 
-        # Inizializza registry con il database di default
+        # Inizializza registry con il database di default (usando relative folder name)
         default_db = {
             "id": "default",
             "name": "Database Primario RAG",
-            "path": str((self.base_dir / "default_lancedb").resolve()),
+            "folderName": "default_lancedb",
             "createdAt": time.strftime("%Y-%m-%d %H:%M:%S"),
             "updatedAt": time.strftime("%Y-%m-%d %H:%M:%S"),
             "embeddingModel": "qwen3-embedding:0.6b",
@@ -62,33 +62,54 @@ class DatabaseManager:
         with self.registry_file.open("w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
 
+    def _get_path_for_info(self, db_info: Dict[str, Any]) -> str:
+        folder = db_info.get("folderName")
+        if folder:
+            return str((self.base_dir / folder).resolve())
+        return db_info.get("path", str((self.base_dir / "default_lancedb").resolve()))
+
     def list_databases(self) -> List[Dict[str, Any]]:
-        return self.databases
+        res = []
+        for db in self.databases:
+            info = dict(db)
+            info["path"] = self._get_path_for_info(db)
+            res.append(info)
+        return res
+
+    def get_info_for_id(self, db_id: str) -> Dict[str, Any]:
+        for db in self.databases:
+            if db["id"] == db_id:
+                info = dict(db)
+                info["path"] = self._get_path_for_info(db)
+                return info
+        active = self.get_active_info()
+        return active
 
     def get_active_info(self) -> Dict[str, Any]:
-        for db in self.databases:
-            if db["id"] == self.active_id:
-                return db
-        return self.databases[0]
+        return self.get_info_for_id(self.active_id)
 
-    def get_active_table(self, table_name: str = "chunks") -> lancedb.table.Table:
-        active_info = self.get_active_info()
-        db_path = active_info["path"]
+    def get_table_for_db(self, db_id: str, table_name: str = "chunks") -> lancedb.table.Table:
+        info = self.get_info_for_id(db_id)
+        db_path = info["path"]
         conn = connetti(db_path)
-        tabella = apri_o_crea_tabella(conn, dimensione_embedding=active_info.get("dimension", 1024))
+        tabella = apri_o_crea_tabella(conn, dimensione_embedding=info.get("dimension", 1024))
         try:
             crea_indice_fulltext(tabella)
         except Exception:
             pass
         return tabella
 
+    def get_active_table(self, table_name: str = "chunks") -> lancedb.table.Table:
+        return self.get_table_for_db(self.active_id, table_name)
+
     def create_database(self, name: str, embedding_model: str = "qwen3-embedding:0.6b", dimension: int = 1024) -> Dict[str, Any]:
         db_id = f"db_{uuid.uuid4().hex[:8]}"
-        db_path = (self.base_dir / db_id).resolve()
+        folder_name = db_id
+        db_path = (self.base_dir / folder_name).resolve()
         db_info = {
             "id": db_id,
             "name": name,
-            "path": str(db_path),
+            "folderName": folder_name,
             "createdAt": time.strftime("%Y-%m-%d %H:%M:%S"),
             "updatedAt": time.strftime("%Y-%m-%d %H:%M:%S"),
             "embeddingModel": embedding_model,
@@ -101,7 +122,9 @@ class DatabaseManager:
 
         self.databases.append(db_info)
         self._save_registry()
-        return db_info
+        res = dict(db_info)
+        res["path"] = str(db_path)
+        return res
 
     def activate_database(self, db_id: str) -> Dict[str, Any]:
         target = next((db for db in self.databases if db["id"] == db_id), None)
@@ -140,7 +163,7 @@ class DatabaseManager:
         return True
 
     def export_database(self, db_id: str) -> Path:
-        target = next((db for db in self.databases if db["id"] == db_id), None)
+        target = self.get_info_for_id(db_id)
         if not target:
             raise KeyError(f"Database '{db_id}' non trovato")
 
@@ -148,6 +171,30 @@ class DatabaseManager:
         export_zip = self.base_dir / f"export_{db_id}_{int(time.time())}.zip"
         shutil.make_archive(str(export_zip.with_suffix("")), "zip", db_path)
         return export_zip.with_suffix(".zip")
+
+    def import_database(self, zip_path: Path, name: str) -> Dict[str, Any]:
+        db_id = f"db_{uuid.uuid4().hex[:8]}"
+        folder_name = db_id
+        target_dir = (self.base_dir / folder_name).resolve()
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        shutil.unpack_archive(str(zip_path), str(target_dir), "zip")
+
+        db_info = {
+            "id": db_id,
+            "name": name,
+            "folderName": folder_name,
+            "createdAt": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "updatedAt": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "embeddingModel": "qwen3-embedding:0.6b",
+            "dimension": 1024,
+        }
+
+        self.databases.append(db_info)
+        self._save_registry()
+        res = dict(db_info)
+        res["path"] = str(target_dir)
+        return res
 
 
 db_manager = DatabaseManager()

@@ -3,7 +3,7 @@ import { KnowledgeDocument } from '../types';
 
 interface KnowledgeNodesViewProps {
   documents: KnowledgeDocument[];
-  onShowToast: (msg: string) => void;
+  onShowToast: (msg: string, isError?: boolean) => void;
   onOpenIngest: () => void;
 }
 

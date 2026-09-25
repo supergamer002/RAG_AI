@@ -15,3 +15,5 @@ start "RAG AI Backend (FastAPI)" cmd /k "cd /d "%~dp0" && uvicorn webapp.backend
 
 echo Avvio della dashboard frontend su http://localhost:3000 ...
 call npm run dev
+
+pause

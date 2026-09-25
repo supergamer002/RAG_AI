@@ -94,6 +94,56 @@ export const DatabaseManagerModal: React.FC<DatabaseManagerModalProps> = ({
       });
   };
 
+  const handleRename = (dbId: string, currentName: string) => {
+    const updated = prompt('Nuovo nome per il database:', currentName);
+    if (!updated || !updated.trim() || updated.trim() === currentName) return;
+
+    fetch(`${API_BASE_URL}/api/databases/${dbId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: updated.trim() }),
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error('Errore durante la rinomina');
+        return res.json();
+      })
+      .then((data) => {
+        onShowToast(`Database rinominato in "${data.name}".`);
+        fetchDatabases();
+      })
+      .catch((err) => {
+        onShowToast(`Impossibile rinominare: ${err.message}`, true);
+      });
+  };
+
+  const handleExport = (dbId: string, name: string) => {
+    window.open(`${API_BASE_URL}/api/databases/${dbId}/export`, '_blank');
+    onShowToast(`Esportazione avviata per "${name}".`);
+  };
+
+  const handleImportFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || !e.target.files[0]) return;
+    const file = e.target.files[0];
+    const formData = new FormData();
+    formData.append('file', file);
+
+    fetch(`${API_BASE_URL}/api/databases/import`, {
+      method: 'POST',
+      body: formData,
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error('Errore durante l\'importazione');
+        return res.json();
+      })
+      .then((data) => {
+        onShowToast(`Database "${data.name}" importato con successo!`);
+        fetchDatabases();
+      })
+      .catch((err) => {
+        onShowToast(`Impossibile importare: ${err.message}`, true);
+      });
+  };
+
   const handleDelete = (dbId: string, name: string) => {
     if (!confirm(`Sei sicuro di voler eliminare il database "${name}"?`)) return;
 
@@ -147,22 +197,33 @@ export const DatabaseManagerModal: React.FC<DatabaseManagerModalProps> = ({
 
         {/* Content */}
         <div className="p-6 flex flex-col gap-5 max-h-[70vh] overflow-y-auto">
-          {/* Create New DB Bar */}
-          <div className="flex items-center gap-2 bg-[#0a0e18] p-3 rounded-lg border border-[#262a35]">
+          {/* Create New DB Bar & Import Trigger */}
+          <div className="flex flex-col sm:flex-row items-center gap-2 bg-[#0a0e18] p-3 rounded-lg border border-[#262a35]">
             <input
               type="text"
               value={newDbName}
               onChange={(e) => setNewDbName(e.target.value)}
               placeholder="Nome del nuovo database (es. Ingegneria Chimica)..."
-              className="flex-1 bg-[#171b26] text-[#dfe2f1] text-[13px] px-3 py-2 rounded-lg border border-[#262a35] focus:outline-none focus:ring-1 focus:ring-[#4cd7f6] font-mono"
+              className="flex-1 bg-[#171b26] text-[#dfe2f1] text-[13px] px-3 py-2 rounded-lg border border-[#262a35] focus:outline-none focus:ring-1 focus:ring-[#4cd7f6] font-mono w-full"
             />
-            <button
-              onClick={handleCreateDatabase}
-              disabled={isCreating || !newDbName.trim()}
-              className="px-4 py-2 bg-[#4cd7f6] hover:bg-[#06b6d4] text-[#003640] font-semibold text-[12px] rounded-lg font-mono transition-all cursor-pointer disabled:opacity-50 shrink-0"
-            >
-              + Nuovo Database
-            </button>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={handleCreateDatabase}
+                disabled={isCreating || !newDbName.trim()}
+                className="px-4 py-2 bg-[#4cd7f6] hover:bg-[#06b6d4] text-[#003640] font-semibold text-[12px] rounded-lg font-mono transition-all cursor-pointer disabled:opacity-50"
+              >
+                + Nuovo
+              </button>
+              <label className="px-3 py-2 bg-[#262a35] hover:bg-[#353944] text-[#dfe2f1] font-semibold text-[12px] rounded-lg font-mono transition-all cursor-pointer border border-[#3d494c]/40">
+                Importa .zip
+                <input
+                  type="file"
+                  accept=".zip"
+                  onChange={handleImportFile}
+                  className="hidden"
+                />
+              </label>
+            </div>
           </div>
 
           {/* Database List */}
@@ -203,6 +264,20 @@ export const DatabaseManagerModal: React.FC<DatabaseManagerModalProps> = ({
                         Attiva
                       </button>
                     )}
+                    <button
+                      onClick={() => handleRename(db.id, db.name)}
+                      className="px-2.5 py-1.5 bg-[#262a35] hover:bg-[#353944] text-[#bcc9cd] hover:text-[#dfe2f1] text-[11px] rounded transition-colors border border-[#3d494c]/40 cursor-pointer"
+                      title="Rinomina database"
+                    >
+                      Rinomina
+                    </button>
+                    <button
+                      onClick={() => handleExport(db.id, db.name)}
+                      className="px-2.5 py-1.5 bg-[#262a35] hover:bg-[#353944] text-[#c0c1ff] hover:text-[#dfe2f1] text-[11px] rounded transition-colors border border-[#3d494c]/40 cursor-pointer"
+                      title="Esporta database in ZIP"
+                    >
+                      Esporta
+                    </button>
                     {!isActive && databases.length > 1 && (
                       <button
                         onClick={() => handleDelete(db.id, db.name)}

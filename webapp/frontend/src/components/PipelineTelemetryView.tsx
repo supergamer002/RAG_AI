@@ -4,7 +4,7 @@ import { TelemetryLog } from '../types';
 interface PipelineTelemetryViewProps {
   logs: TelemetryLog[];
   onClearLogs: () => void;
-  onShowToast: (msg: string) => void;
+  onShowToast: (msg: string, isError?: boolean) => void;
 }
 
 export const PipelineTelemetryView: React.FC<PipelineTelemetryViewProps> = ({
