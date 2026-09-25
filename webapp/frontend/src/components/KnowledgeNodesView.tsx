@@ -23,8 +23,26 @@ export const KnowledgeNodesView: React.FC<KnowledgeNodesViewProps> = ({
     return matchesType && matchesSearch;
   });
 
+  const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+
   const handleReindex = (docName: string) => {
-    onShowToast(`Re-indicizzazione avviata per "${docName}" con parser Docling AST.`);
+    const formData = new FormData();
+    formData.append('path', docName);
+
+    fetch(`${API_BASE_URL}/api/ingest`, {
+      method: 'POST',
+      body: formData,
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error('Errore durante la re-indicizzazione');
+        return res.json();
+      })
+      .then((data) => {
+        onShowToast(`Re-indicizzazione avviata in background per "${docName}" (Job ID: ${data.jobId.slice(0, 8)}).`);
+      })
+      .catch((err) => {
+        onShowToast(`Impossibile re-indicizzare "${docName}": ${err.message}`, true);
+      });
   };
 
   return (

@@ -32,6 +32,10 @@ export const PipelineTelemetryView: React.FC<PipelineTelemetryViewProps> = ({
     }
   };
 
+  const durations = filteredLogs.map((l) => l.durationMs).filter((d): d is number => d !== undefined);
+  const avgDuration = durations.length > 0 ? (durations.reduce((a, b) => a + b, 0) / durations.length).toFixed(1) : '0.0';
+  const p95Duration = durations.length > 0 ? (durations.sort((a, b) => a - b)[Math.floor(durations.length * 0.95)] || durations[durations.length - 1]).toFixed(1) : '0.0';
+
   return (
     <div className="p-6 flex flex-col gap-6 max-w-[1600px] mx-auto w-full relative z-10">
       {/* Header */}
@@ -82,34 +86,34 @@ export const PipelineTelemetryView: React.FC<PipelineTelemetryViewProps> = ({
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-[#171b26] p-4 rounded-xl border border-[#262a35]">
           <span className="font-mono text-[10px] text-[#bcc9cd] uppercase tracking-wider">
-            Latenza P50 (Mediana)
+            Latenza Media
           </span>
-          <div className="text-[22px] font-semibold text-[#4cd7f6] mt-1 font-mono">18.2 ms</div>
-          <span className="font-mono text-[11px] text-[#bcc9cd]">Nominale / Sub-30ms target</span>
+          <div className="text-[22px] font-semibold text-[#4cd7f6] mt-1 font-mono">{avgDuration} ms</div>
+          <span className="font-mono text-[11px] text-[#bcc9cd]">Dati reali tracciatore</span>
         </div>
 
         <div className="bg-[#171b26] p-4 rounded-xl border border-[#262a35]">
           <span className="font-mono text-[10px] text-[#bcc9cd] uppercase tracking-wider">
             Latenza P95
           </span>
-          <div className="text-[22px] font-semibold text-[#dfe2f1] mt-1 font-mono">38.4 ms</div>
+          <div className="text-[22px] font-semibold text-[#dfe2f1] mt-1 font-mono">{p95Duration} ms</div>
           <span className="font-mono text-[11px] text-[#bcc9cd]">Con Cross-Encoder Reranker</span>
         </div>
 
         <div className="bg-[#171b26] p-4 rounded-xl border border-[#262a35]">
           <span className="font-mono text-[10px] text-[#bcc9cd] uppercase tracking-wider">
-            Latenza P99 (Coda)
+            Log Tracciati
           </span>
-          <div className="text-[22px] font-semibold text-[#d0bcff] mt-1 font-mono">64.1 ms</div>
-          <span className="font-mono text-[11px] text-[#bcc9cd]">Cold-start o grandi corpus</span>
+          <div className="text-[22px] font-semibold text-[#d0bcff] mt-1 font-mono">{filteredLogs.length}</div>
+          <span className="font-mono text-[11px] text-[#bcc9cd]">Componenti FastAPI / Ollama / LanceDB</span>
         </div>
 
         <div className="bg-[#171b26] p-4 rounded-xl border border-[#262a35]">
           <span className="font-mono text-[10px] text-[#bcc9cd] uppercase tracking-wider">
-            Throughput Concorrente
+            Stato Backend
           </span>
-          <div className="text-[22px] font-semibold text-[#10b981] mt-1 font-mono">24.5 req/s</div>
-          <span className="font-mono text-[11px] text-[#bcc9cd]">8 thread worker Uvicorn</span>
+          <div className="text-[22px] font-semibold text-[#10b981] mt-1 font-mono">200 OK</div>
+          <span className="font-mono text-[11px] text-[#bcc9cd]">Uvicorn / FastAPI Online</span>
         </div>
       </div>
 

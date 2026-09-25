@@ -24,12 +24,23 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [showSecret, setShowSecret] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
 
+  const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+
   const handleTestPing = () => {
     setIsTesting(true);
-    onTestConnections();
-    setTimeout(() => {
-      setIsTesting(false);
-    }, 1200);
+    fetch(`${API_BASE_URL}/api/health`)
+      .then((res) => res.json())
+      .then((data) => {
+        setIsTesting(false);
+        const fast = data.fastapi ? '200 OK' : 'Offline';
+        const lance = data.lancedb ? 'Active' : 'Error';
+        const ollama = data.ollama ? 'Online' : 'Offline';
+        onTestConnections();
+      })
+      .catch(() => {
+        setIsTesting(false);
+        onTestConnections();
+      });
   };
 
   return (

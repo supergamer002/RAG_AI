@@ -16,6 +16,15 @@ def test_root_endpoint(client):
     assert res.json() == {"status": "ok", "service": "RAG AI Backend"}
 
 
+def test_health_endpoint(client):
+    res = client.get("/api/health")
+    assert res.status_code == 200
+    data = res.json()
+    assert "fastapi" in data
+    assert "lancedb" in data
+    assert "ollama" in data
+
+
 def test_settings_endpoints(client):
     res_get = client.get("/api/settings")
     assert res_get.status_code == 200
@@ -59,3 +68,11 @@ def test_query_endpoint(client):
     data = res.json()
     assert "answer" in data
     assert "chunks" in data
+
+
+def test_query_endpoint_modes(client):
+    res_dense = client.post("/api/query", json={"query": "Test dense", "searchMode": "dense", "enableRerank": False})
+    assert res_dense.status_code == 200
+
+    res_sparse = client.post("/api/query", json={"query": "Test sparse", "searchMode": "sparse", "enableRerank": False})
+    assert res_sparse.status_code == 200
