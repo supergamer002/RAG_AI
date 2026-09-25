@@ -1,11 +1,14 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { ThemeMode } from '../types';
+
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
 interface HeaderProps {
   themeMode: ThemeMode;
   onToggleTheme: () => void;
   onOpenIngest: () => void;
   onOpenTerminal: () => void;
+  onOpenDatabaseManager?: () => void;
   searchFilter: string;
   onSearchChange: (value: string) => void;
 }
@@ -15,9 +18,39 @@ export const Header: React.FC<HeaderProps> = ({
   onToggleTheme,
   onOpenIngest,
   onOpenTerminal,
+  onOpenDatabaseManager,
   searchFilter,
   onSearchChange,
 }) => {
+  const [health, setHealth] = useState<{ fastapi: boolean; lancedb: boolean; ollama: boolean }>({
+    fastapi: true,
+    lancedb: true,
+    ollama: false,
+  });
+
+  useEffect(() => {
+    const checkHealth = () => {
+      fetch(`${API_BASE_URL}/api/health`)
+        .then((res) => res.ok ? res.json() : null)
+        .then((data) => {
+          if (data) {
+            setHealth({
+              fastapi: !!data.fastapi,
+              lancedb: !!data.lancedb,
+              ollama: !!data.ollama,
+            });
+          }
+        })
+        .catch(() => {
+          setHealth({ fastapi: false, lancedb: false, ollama: false });
+        });
+    };
+
+    checkHealth();
+    const interval = setInterval(checkHealth, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
   return (
     <header className="fixed top-0 left-64 right-0 h-16 bg-[#0f131d]/85 backdrop-blur-xl z-40 border-b border-[#262a35]/60">
       <div className="h-16 w-full px-6 flex items-center justify-between gap-4">
@@ -25,23 +58,29 @@ export const Header: React.FC<HeaderProps> = ({
         <div className="flex items-center gap-2 overflow-x-auto py-1 scrollbar-none">
           {/* FastAPI */}
           <div className="flex items-center gap-1.5 bg-[#171b26] px-2.5 py-1.5 rounded-lg border border-[#06b6d4]/30 shadow-[0_0_12px_-4px_rgba(6,182,212,0.25)] shrink-0">
-            <span className="w-1.5 h-1.5 rounded-full bg-[#4cd7f6] animate-ping" />
+            <span className={`w-1.5 h-1.5 rounded-full ${health.fastapi ? 'bg-[#4cd7f6] animate-ping' : 'bg-[#ffb4ab]'}`} />
             <span className="font-mono text-[11px] text-[#bcc9cd]">FastAPI:</span>
-            <span className="font-mono text-[11px] text-[#4cd7f6] font-semibold">Online</span>
+            <span className={`font-mono text-[11px] font-semibold ${health.fastapi ? 'text-[#4cd7f6]' : 'text-[#ffb4ab]'}`}>
+              {health.fastapi ? 'Online' : 'Offline'}
+            </span>
           </div>
 
           {/* LanceDB */}
           <div className="flex items-center gap-1.5 bg-[#171b26] px-2.5 py-1.5 rounded-lg border border-[#262a35] shrink-0">
-            <span className="w-1.5 h-1.5 rounded-full bg-[#4cd7f6]" />
+            <span className={`w-1.5 h-1.5 rounded-full ${health.lancedb ? 'bg-[#4cd7f6]' : 'bg-[#ffb4ab]'}`} />
             <span className="font-mono text-[11px] text-[#bcc9cd]">LanceDB:</span>
-            <span className="font-mono text-[11px] text-[#dfe2f1] font-medium">Connected</span>
+            <span className={`font-mono text-[11px] font-medium ${health.lancedb ? 'text-[#dfe2f1]' : 'text-[#ffb4ab]'}`}>
+              {health.lancedb ? 'Connected' : 'Error'}
+            </span>
           </div>
 
           {/* Ollama */}
           <div className="flex items-center gap-1.5 bg-[#171b26] px-2.5 py-1.5 rounded-lg border border-[#262a35] shrink-0">
-            <span className="w-1.5 h-1.5 rounded-full bg-[#d0bcff]" />
+            <span className={`w-1.5 h-1.5 rounded-full ${health.ollama ? 'bg-[#d0bcff]' : 'bg-[#ffb4ab]'}`} />
             <span className="font-mono text-[11px] text-[#bcc9cd]">Ollama:</span>
-            <span className="font-mono text-[11px] text-[#d0bcff] font-medium">Ready</span>
+            <span className={`font-mono text-[11px] font-medium ${health.ollama ? 'text-[#d0bcff]' : 'text-[#ffb4ab]'}`}>
+              {health.ollama ? 'Ready' : 'Standby'}
+            </span>
           </div>
 
           {/* CrossEncoder */}
@@ -75,6 +114,18 @@ export const Header: React.FC<HeaderProps> = ({
               </button>
             )}
           </div>
+
+          {/* Database Manager Trigger */}
+          {onOpenDatabaseManager && (
+            <button
+              onClick={onOpenDatabaseManager}
+              className="flex items-center gap-1.5 bg-[#262a35] hover:bg-[#353944] text-[#dfe2f1] px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors border border-[#3d494c]/40 cursor-pointer shadow-sm"
+              title="Gestisci Database LanceDB"
+            >
+              <span className="material-symbols-outlined text-[16px] text-[#4cd7f6]">database</span>
+              <span className="font-mono">Database</span>
+            </button>
+          )}
 
           {/* Direct Theme Toggle */}
           <button

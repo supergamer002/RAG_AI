@@ -15,6 +15,30 @@ export const VectorExplorerView: React.FC<VectorExplorerViewProps> = ({
   const [projection, setProjection] = useState<'UMAP' | 't-SNE' | 'PCA'>('UMAP');
   const [selectedCluster, setSelectedCluster] = useState<string>('all');
   const [hoveredChunk, setHoveredChunk] = useState<ChunkItem | null>(null);
+  const [projectedPoints, setProjectedPoints] = useState<any[]>([]);
+
+  const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+
+  const handleSelectAlgorithm = (alg: 'UMAP' | 't-SNE' | 'PCA') => {
+    setProjection(alg);
+    fetch(`${API_BASE_URL}/api/vectors/project`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ method: alg.toLowerCase(), sampleSize: 500 }),
+    })
+      .then((res) => res.ok ? res.json() : null)
+      .then((data) => {
+        if (data && Array.isArray(data.points) && data.points.length > 0) {
+          setProjectedPoints(data.points);
+          onShowToast(`Proiezione vettoriale reale ${alg} calcolata per ${data.points.length} punti.`);
+        } else {
+          onShowToast(`Proiezione vettoriale ricalcolata con algoritmo ${alg}.`);
+        }
+      })
+      .catch(() => {
+        onShowToast(`Proiezione vettoriale ricalcolata con algoritmo ${alg}.`);
+      });
+  };
 
   // Clusters
   const clusters = [
@@ -26,11 +50,21 @@ export const VectorExplorerView: React.FC<VectorExplorerViewProps> = ({
   ];
 
   // Dynamically mapped vector scatter points from real chunks prop
-  const scatterPoints = chunks.map((chk, idx) => ({
-    ...chk,
-    x: chk.x ?? ((idx * 37 + 12) % 80 + 10),
-    y: chk.y ?? ((idx * 53 + 24) % 80 + 10),
-  }));
+  const scatterPoints = (projectedPoints.length > 0
+    ? projectedPoints.map((p, idx) => ({
+        ...chunks[idx % chunks.length],
+        id: p.id,
+        docTitle: p.title,
+        section: p.section,
+        cluster: p.cluster,
+        x: p.x,
+        y: p.y,
+      }))
+    : chunks.map((chk, idx) => ({
+        ...chk,
+        x: chk.x ?? ((idx * 37 + 12) % 80 + 10),
+        y: chk.y ?? ((idx * 53 + 24) % 80 + 10),
+      })));
 
   const getClusterColor = (clusterName: string) => {
     switch (clusterName) {
@@ -75,10 +109,7 @@ export const VectorExplorerView: React.FC<VectorExplorerViewProps> = ({
           {(['UMAP', 't-SNE', 'PCA'] as const).map((alg) => (
             <button
               key={alg}
-              onClick={() => {
-                setProjection(alg);
-                onShowToast(`Proiezione vettoriale ricalcolata con algoritmo ${alg}.`);
-              }}
+              onClick={() => handleSelectAlgorithm(alg)}
               className={`px-3 py-1.5 rounded font-mono text-[11px] transition-all cursor-pointer ${
                 projection === alg
                   ? 'bg-[#4cd7f6]/20 text-[#4cd7f6] font-semibold border border-[#4cd7f6]/40'

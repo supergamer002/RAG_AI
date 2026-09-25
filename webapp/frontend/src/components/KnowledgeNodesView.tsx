@@ -25,13 +25,9 @@ export const KnowledgeNodesView: React.FC<KnowledgeNodesViewProps> = ({
 
   const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
-  const handleReindex = (docName: string) => {
-    const formData = new FormData();
-    formData.append('path', docName);
-
-    fetch(`${API_BASE_URL}/api/ingest`, {
+  const handleReindex = (docId: string, docName: string) => {
+    fetch(`${API_BASE_URL}/api/documents/${docId}/reindex`, {
       method: 'POST',
-      body: formData,
     })
       .then((res) => {
         if (!res.ok) throw new Error('Errore durante la re-indicizzazione');
@@ -208,7 +204,7 @@ export const KnowledgeNodesView: React.FC<KnowledgeNodesViewProps> = ({
                   <td className="py-3.5 px-4 text-right">
                     <div className="flex items-center justify-end gap-2 font-mono">
                       <button
-                        onClick={() => handleReindex(doc.name)}
+                        onClick={() => handleReindex(doc.id, doc.name)}
                         className="px-2.5 py-1 rounded bg-[#262a35] hover:bg-[#353944] text-[#dfe2f1] text-[11px] transition-colors border border-[#3d494c]/30 cursor-pointer"
                         title="Re-indicizza con Docling"
                       >

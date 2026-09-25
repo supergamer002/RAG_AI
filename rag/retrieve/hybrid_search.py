@@ -95,17 +95,21 @@ def _ricerca_fulltext(
     return id_list, punteggi
 
 
-def _rrf_fusion(*ranking: list[str], k: int = RRF_K) -> list[str]:
-    """Fonde N liste ordinate di chunk_id in un'unica classifica RRF.
+def _rrf_fusion(
+    ranking_dense: list[str],
+    ranking_fts: list[str],
+    k: int = RRF_K,
+    alpha: float = 0.5,
+) -> list[str]:
+    """Fonde le due liste ordinate (dense e fts) pesando dense con alpha e fts con (1 - alpha).
 
-    score(id) = somma su ogni lista di 1 / (k + rank), rank a partire da 1.
-    Un id assente da una lista non contribuisce da quella lista (non viene
-    penalizzato oltre il non ricevere il suo punteggio).
+    score(id) = alpha * (1 / (k + rank_dense)) + (1 - alpha) * (1 / (k + rank_fts))
     """
     punteggi: dict[str, float] = {}
-    for lista in ranking:
-        for rank, chunk_id in enumerate(lista, start=1):
-            punteggi[chunk_id] = punteggi.get(chunk_id, 0.0) + 1.0 / (k + rank)
+    for rank, chunk_id in enumerate(ranking_dense, start=1):
+        punteggi[chunk_id] = punteggi.get(chunk_id, 0.0) + alpha * (1.0 / (k + rank))
+    for rank, chunk_id in enumerate(ranking_fts, start=1):
+        punteggi[chunk_id] = punteggi.get(chunk_id, 0.0) + (1.0 - alpha) * (1.0 / (k + rank))
     return sorted(punteggi, key=punteggi.get, reverse=True)
 
 
@@ -115,20 +119,27 @@ def ricerca_ibrida(
     query_testo: str,
     top_k: int = TOP_K_CANDIDATI,
     tracciatore: TracciatoreLatenza | None = None,
+    search_mode: str = "hybrid",
+    hybrid_alpha: float = 0.5,
 ) -> list[dict]:
-    """Esegue dense + full-text, fonde con RRF, ritorna i record completi
-    dei top_k chunk (da passare al reranker).
-
-    Nota: LanceDB puo' emettere un DeprecationWarning su _distance/_score
-    non richiesti esplicitamente nelle select(); e' un warning innocuo sul
-    comportamento futuro della libreria, non influisce sul risultato.
+    """Esegue ricerca secondo search_mode ('hybrid', 'dense', 'sparse'/'bm25'),
+    applica hybrid_alpha per bilanciare RRF, e ritorna i top_k chunk.
     """
     def _esegui():
         k_candidati = top_k * 2  # margine sopra top_k prima della fusione
-        id_dense, punteggi_dense = _ricerca_vettoriale(tabella, vettore_query, k_candidati)
-        id_fts, punteggi_fts = _ricerca_fulltext(tabella, query_testo, k_candidati)
+        mode = (search_mode or "hybrid").lower()
 
-        id_fusi = _rrf_fusion(id_dense, id_fts)[:top_k]
+        if mode == "dense":
+            id_fusi, punteggi_dense = _ricerca_vettoriale(tabella, vettore_query, top_k)
+            punteggi_fts = {}
+        elif mode in ("sparse", "bm25", "fts"):
+            id_fusi, punteggi_fts = _ricerca_fulltext(tabella, query_testo, top_k)
+            punteggi_dense = {}
+        else:
+            id_dense, punteggi_dense = _ricerca_vettoriale(tabella, vettore_query, k_candidati)
+            id_fts, punteggi_fts = _ricerca_fulltext(tabella, query_testo, k_candidati)
+            id_fusi = _rrf_fusion(id_dense, id_fts, alpha=hybrid_alpha)[:top_k]
+
         if not id_fusi:
             return []
 

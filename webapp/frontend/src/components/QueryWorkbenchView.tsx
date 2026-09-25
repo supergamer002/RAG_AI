@@ -39,7 +39,14 @@ export const QueryWorkbenchView: React.FC<QueryWorkbenchViewProps> = ({
     fetch(`${API_BASE_URL}/api/query`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query, topK: 20, topN: 6 }),
+      body: JSON.stringify({
+        query,
+        topK: 20,
+        topN: 6,
+        searchMode,
+        hybridAlpha,
+        enableRerank,
+      }),
     })
       .then((res) => {
         if (!res.ok) throw new Error('Errore query API');
