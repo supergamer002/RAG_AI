@@ -76,7 +76,7 @@ def ingest_cartella_unita(
 ) -> list[Chunk]:
     """Applica ingest_file_unita a tutti i JSON di una cartella."""
     chunks: list[Chunk] = []
-    for path_json in sorted(cartella.glob("*.json")):
+    for path_json in sorted(cartella.rglob("*.json")):
         chunks.extend(
             ingest_file_unita(
                 path_json,

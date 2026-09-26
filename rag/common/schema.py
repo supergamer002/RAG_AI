@@ -33,7 +33,11 @@ class Chunk:
     def __post_init__(self) -> None:
         # id deterministico: stesso testo + stessa fonte => stesso id.
         # Permette upsert idempotenti in LanceDB (re-ingest senza duplicati).
-        base = f"{self.fonte_titolo}|{self.sezione}|{self.posizione}|{self.testo}"
+        self.ricalcola_id()
+
+    def ricalcola_id(self) -> None:
+        """Ricalcola l'ID includendo la sorgente, evitando collisioni tra file omonimi."""
+        base = f"{self.fonte_path}|{self.fonte_titolo}|{self.sezione}|{self.posizione}|{self.testo}"
         self.chunk_id = hashlib.sha256(base.encode("utf-8")).hexdigest()[:24]
 
     def to_record(self) -> dict:

@@ -16,8 +16,8 @@ export const IngestModal: React.FC<IngestModalProps> = ({
   onIngestSuccess,
   onShowToast,
 }) => {
-  const [selectedFile, setSelectedFile] = useState<string>('Specifiche_Tecniche_LanceDB_v0.12.pdf');
-  const [fileObject, setFileObject] = useState<File | null>(null);
+  const [fileObjects, setFileObjects] = useState<File[]>([]);
+  const [selectionLabel, setSelectionLabel] = useState('');
   const [ocrEnabled, setOcrEnabled] = useState(true);
   const [chunkTokens, setChunkTokens] = useState(512);
   const [overlapPct, setOverlapPct] = useState(15);
@@ -31,10 +31,13 @@ export const IngestModal: React.FC<IngestModalProps> = ({
     setStep('Inizio caricamento e parsing...');
 
     const formData = new FormData();
-    if (fileObject) {
-      formData.append('file', fileObject);
+    if (fileObjects.length) {
+      fileObjects.forEach((item) => formData.append('files', item, item.name));
+      formData.append('relativePaths', JSON.stringify(fileObjects.map((item) => (item as File & { webkitRelativePath?: string }).webkitRelativePath || item.name)));
     } else {
-      formData.append('path', selectedFile);
+      onShowToast('Seleziona almeno un file o una cartella.', true);
+      setIsProcessing(false);
+      return;
     }
     formData.append('chunkSize', String(chunkTokens));
     formData.append('chunkOverlap', String(overlapPct));
@@ -52,34 +55,53 @@ export const IngestModal: React.FC<IngestModalProps> = ({
         const jobId = data.jobId;
         setStep('Elaborazione in background in corso...');
 
-        const interval = setInterval(() => {
-          apiFetch(`/api/ingest/status/${jobId}`)
-            .then(async (res) => {
-              const statusData = await res.json().catch(() => null);
-              if (!res.ok) throw new Error(statusData?.detail || `HTTP ${res.status}`);
-              return statusData;
-            })
-            .then((statusData) => {
-              if (statusData.status === 'completed') {
-                clearInterval(interval);
-                setIsProcessing(false);
-                const created = statusData.chunksCreated || 0;
-                const ingestedName = fileObject?.name || selectedFile;
-                onIngestSuccess(ingestedName, created);
-                onShowToast(`File "${ingestedName}" indicizzato con successo (${created} chunks)!`);
-                onClose();
-              } else if (statusData.status === 'failed') {
-                clearInterval(interval);
-                setIsProcessing(false);
-                onShowToast(`Errore durante l'ingest: ${statusData.error}`, true);
-              }
-            })
-            .catch((err) => {
-              clearInterval(interval);
+        let pollErrors = 0;
+        const startedAt = Date.now();
+        const maxClientWaitMs = 30 * 60 * 1000;
+        const poll = async () => {
+          if (Date.now() - startedAt > maxClientWaitMs) {
+            setIsProcessing(false);
+            onShowToast("L'ingestion sta impiegando troppo tempo. Controlla lo stato dal backend.", true);
+            return;
+          }
+          try {
+            const res = await apiFetch(`/api/ingest/status/${jobId}`);
+            const statusData = await res.json().catch(() => null);
+            if (!res.ok) throw new Error(statusData?.detail || `HTTP ${res.status}`);
+            pollErrors = 0;
+            const processed = statusData.filesProcessed || 0;
+            const total = statusData.filesTotal || fileObjects.length;
+            const current = statusData.currentFile ? ` — ${statusData.currentFile}` : '';
+            setStep(`${processed}/${total} file elaborati${current}`);
+            if (statusData.status === 'completed') {
+              setIsProcessing(false);
+              const created = statusData.chunksCreated || 0;
+              const ingestedName = fileObjects.length === 1 ? fileObjects[0].name : selectionLabel || `${fileObjects.length} file`;
+              onIngestSuccess(ingestedName, created);
+              const failed = statusData.filesFailed || 0;
+              const suffix = failed ? ` (${failed} file con errore)` : '';
+              onShowToast(`${ingestedName} indicizzato con successo (${created} chunks)${suffix}!`, Boolean(failed));
+              onClose();
+              return;
+            }
+            if (statusData.status === 'failed') {
+              setIsProcessing(false);
+              const details = statusData.errors?.slice?.(0, 3).map((e: any) => `${e.file}: ${e.error}`).join(' | ');
+              onShowToast(`Errore durante l'ingest: ${statusData.error || details || 'errore sconosciuto'}`, true);
+              return;
+            }
+            window.setTimeout(poll, 1000);
+          } catch (err) {
+            pollErrors += 1;
+            if (pollErrors >= 5) {
               setIsProcessing(false);
               onShowToast(`Errore nel controllo dell'ingest: ${err instanceof Error ? err.message : 'errore sconosciuto'}`, true);
-            });
-        }, 1000);
+              return;
+            }
+            window.setTimeout(poll, Math.min(5000, 1000 * pollErrors));
+          }
+        };
+        void poll();
       })
       .catch((err) => {
         setIsProcessing(false);
@@ -127,25 +149,49 @@ export const IngestModal: React.FC<IngestModalProps> = ({
           <label className="border-2 border-dashed border-[#262a35] hover:border-[#4cd7f6]/50 rounded-xl p-6 flex flex-col items-center justify-center text-center bg-[#0a0e18] cursor-pointer transition-colors relative">
             <input
               type="file"
-              accept=".pdf,.json,.md,.txt,.yaml,.docx"
+              multiple
+              accept=".pdf,.json"
               onChange={(e) => {
-                if (e.target.files && e.target.files[0]) {
-                  setFileObject(e.target.files[0]);
-                  setSelectedFile(e.target.files[0].name);
-                }
+                const files = Array.from(e.target.files || []).filter((f) => ['.pdf', '.json'].includes(f.name.slice(f.name.lastIndexOf('.')).toLowerCase()));
+                setFileObjects(files);
+                setSelectionLabel(files.length === 1 ? files[0].name : `${files.length} file selezionati`);
               }}
               className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+            />
+            <input
+              type="file"
+              multiple
+              accept=".pdf,.json"
+              // @ts-expect-error webkitdirectory non e' ancora incluso nello standard TypeScript DOM
+              webkitdirectory="true"
+              // @ts-expect-error directory non e' ancora incluso nello standard TypeScript DOM
+              directory="true"
+              onChange={(e) => {
+                const files = Array.from(e.target.files || []).filter((f) => ['.pdf', '.json'].includes(f.name.slice(f.name.lastIndexOf('.')).toLowerCase()));
+                setFileObjects(files);
+                setSelectionLabel(files.length ? `Cartella: ${files.length} file` : '');
+              }}
+              className="hidden"
+              id="ingest-folder-input"
             />
             <span className="material-symbols-outlined text-[#4cd7f6] text-[36px] mb-2">
               cloud_upload
             </span>
             <span className="text-[13px] text-[#dfe2f1] font-semibold font-mono">
-              {fileObject ? fileObject.name : selectedFile}
+              {selectionLabel || 'Seleziona file oppure una cartella intera'}
             </span>
             <span className="text-[11px] text-[#bcc9cd] mt-1">
-              {fileObject ? `Selezionato: ${(fileObject.size / (1024 * 1024)).toFixed(2)} MB` : 'Clicca per selezionare un file PDF, JSON o Markdown da caricare'}
+              {fileObjects.length ? `${fileObjects.length} file pronti per l'ingest` : 'File supportati: PDF e JSON'}
             </span>
           </label>
+          <button
+            type="button"
+            onClick={() => document.getElementById('ingest-folder-input')?.click()}
+            disabled={isProcessing}
+            className="w-full px-4 py-2 bg-[#1c1f2a] hover:bg-[#262a35] text-[#dfe2f1] text-[12px] rounded-lg border border-[#262a35] font-mono disabled:opacity-50"
+          >
+            📁 Seleziona cartella intera
+          </button>
 
           {/* Config options */}
           <div className="grid grid-cols-2 gap-4 pt-1 font-mono text-[12px]">

@@ -16,7 +16,7 @@ import tempfile
 import shutil
 from collections import defaultdict, deque
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Query, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -70,7 +70,8 @@ config = caricaconfig()
 # Protezione API opzionale: se apiToken e' configurato, tutte le API operative
 # richiedono Bearer token. Il rate limit resta attivo anche senza token.
 _rate_buckets: dict[str, deque[float]] = defaultdict(deque)
-_RATE_EXEMPT = {"/", "/api/health", "/api/settings", "/api/settings/defaults", "/api/auth/status"}
+_RATE_EXEMPT = {"/", "/api/health", "/api/auth/status"}
+_AUTH_EXEMPT = {"/", "/api/health", "/api/auth/status", "/api/settings/defaults"}
 
 @app.middleware("http")
 async def api_security(request: Request, call_next):
@@ -90,7 +91,8 @@ async def api_security(request: Request, call_next):
     bucket.append(now)
 
     configured_token = str(config.get("apiToken") or "").strip()
-    if configured_token and path not in _RATE_EXEMPT:
+    auth_exempt = path in _AUTH_EXEMPT or (path == "/api/settings" and request.method == "GET")
+    if configured_token and not auth_exempt:
         auth = request.headers.get("authorization", "")
         supplied = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
         # EventSource non supporta header custom: accetta token query solo per lo stream SSE.
@@ -120,6 +122,11 @@ generatore_url = f"{config.get('ollamaUrl', 'http://localhost:11434').rstrip('/'
 generatore = OllamaGenerator(url=generatore_url)
 
 ingestion_jobs: Dict[str, Dict[str, Any]] = {}
+_ingestion_tasks: set[asyncio.Task] = set()
+MAX_INGEST_FILES = 500
+MAX_INGEST_FILE_BYTES = 250 * 1024 * 1024
+MAX_INGEST_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
+SUPPORTED_INGEST_EXTENSIONS = {".pdf", ".json"}
 
 
 class QueryRequest(BaseModel):
@@ -346,7 +353,8 @@ def get_documents():
     for r in righe:
         titolo = r.get("fonte_titolo", "Documento")
         path_str = r.get("fonte_path", "")
-        doc_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, titolo))
+        doc_key = path_str or titolo
+        doc_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{active_info['id']}::{doc_key}"))
 
         if doc_id not in per_doc:
             ext = Path(path_str).suffix.upper().replace(".", "") if path_str else "PDF"
@@ -395,7 +403,7 @@ def get_documents():
 @app.post("/api/documents/{document_id}/reindex")
 def reindex_document(document_id: str, background_tasks: BackgroundTasks):
     docs = get_documents()
-    target_doc = next((d for d in docs if d["id"] == document_id or d["name"] == document_id), None)
+    target_doc = next((d for d in docs if d["id"] == document_id), None)
     if not target_doc:
         raise HTTPException(status_code=404, detail="Documento non trovato per il re-indexing")
 
@@ -409,22 +417,14 @@ def reindex_document(document_id: str, background_tasks: BackgroundTasks):
     job_id = str(uuid.uuid4())
     captured_db_id = db_manager.active_id
     ingestion_jobs[job_id] = {
-        "status": "pending",
-        "chunksCreated": 0,
-        "databaseId": captured_db_id,
-        "error": None,
+        "status": "pending", "chunksCreated": 0, "filesTotal": 1, "filesProcessed": 0,
+        "filesFailed": 0, "databaseId": captured_db_id, "error": None, "errors": [],
+        "currentFile": target_doc["name"], "startedAt": time.time(), "updatedAt": time.time(),
     }
 
     if target_path.exists():
-        background_tasks.add_task(
-            esegui_ingestion_job,
-            job_id,
-            target_path,
-            target_path.is_dir(),
-            512,
-            15,
-            True,
-            captured_db_id,
+        _schedule_ingestion_task(
+            esegui_ingestion_job(job_id, target_path, target_path.is_dir(), 512, 15, True, captured_db_id)
         )
     else:
         tabella = db_manager.get_active_table()
@@ -495,7 +495,13 @@ def get_chunk_vector(chunk_id: str):
     }
 
 
-def esegui_ingestion_job(
+def _schedule_ingestion_task(coro) -> None:
+    task = asyncio.create_task(coro)
+    _ingestion_tasks.add(task)
+    task.add_done_callback(_ingestion_tasks.discard)
+
+
+def _esegui_ingestion_job_sync(
     job_id: str,
     filepath: Path,
     is_directory: bool,
@@ -540,6 +546,7 @@ def esegui_ingestion_job(
                     relative_source = source_path.relative_to(source_root.resolve())
                     for chunk in chunks:
                         chunk.fonte_path = str(Path("sources") / relative_source)
+                        chunk.ricalcola_id()
                 except (KeyError, OSError, ValueError):
                     pass
             testi = [c.testo for c in chunks]
@@ -555,59 +562,246 @@ def esegui_ingestion_job(
 
         ingestion_jobs[job_id]["status"] = "completed"
         ingestion_jobs[job_id]["chunksCreated"] = len(chunks)
+        ingestion_jobs[job_id]["filesProcessed"] = 1
+        ingestion_jobs[job_id]["currentFile"] = None
+        ingestion_jobs[job_id]["updatedAt"] = time.time()
     except Exception as e:
         ingestion_jobs[job_id]["status"] = "failed"
         ingestion_jobs[job_id]["error"] = str(e)
+        ingestion_jobs[job_id]["filesFailed"] = 1
+        ingestion_jobs[job_id]["currentFile"] = None
+        ingestion_jobs[job_id]["updatedAt"] = time.time()
 
+
+
+async def esegui_ingestion_job(*args, **kwargs):
+    await asyncio.to_thread(_esegui_ingestion_job_sync, *args, **kwargs)
+
+
+
+def esegui_ingestion_batch_job(
+    job_id: str,
+    filepaths: Sequence[Path],
+    batch_root: Path,
+    chunk_tokens: int = 512,
+    overlap_pct: int = 15,
+    ocr_enabled: bool = True,
+    database_id: Optional[str] = None,
+):
+    """Processa in sequenza tutti i file di un upload singolo o di una cartella.
+
+    Un file fallito non blocca gli altri. Il job termina ``completed`` se almeno
+    un file e' stato processato; se tutti falliscono termina ``failed``.
+    """
+    job = ingestion_jobs[job_id]
+    job["status"] = "in_progress"
+    job["startedAt"] = job.get("startedAt") or time.time()
+    job["updatedAt"] = time.time()
+    target_db_id = database_id or db_manager.active_id
+
+    try:
+        db_root = Path(db_manager.get_info_for_id(target_db_id)["path"]).resolve()
+        source_root = db_root / "sources"
+        tabella = db_manager.get_table_for_db(target_db_id)
+    except Exception as exc:
+        job["status"] = "failed"
+        job["error"] = f"Impossibile aprire il database target: {exc}"
+        shutil.rmtree(batch_root, ignore_errors=True)
+        return
+
+    total_chunks = 0
+    errors: List[Dict[str, str]] = []
+
+    for filepath in filepaths:
+        job["currentFile"] = str(filepath.relative_to(batch_root))
+        job["updatedAt"] = time.time()
+        try:
+            suffix = filepath.suffix.lower()
+            if suffix == ".json":
+                chunks = ingest_file_unita(filepath, target_token=chunk_tokens, overlap_ratio=overlap_pct / 100.0)
+            elif suffix == ".pdf":
+                chunks = ingest_pdf(
+                    filepath,
+                    TipoFonte.LIBRO,
+                    target_token=chunk_tokens,
+                    overlap_ratio=overlap_pct / 100.0,
+                    ocr_enabled=ocr_enabled,
+                )
+            else:
+                raise ValueError(f"Formato non supportato: {suffix or '(nessuna estensione)'}")
+
+            # Il path indicizzato e' relativo al database, mai assoluto.
+            relative_source = filepath.resolve().relative_to(source_root.resolve())
+            for chunk in chunks:
+                chunk.fonte_path = str(relative_source).replace("\\", "/")
+                chunk.ricalcola_id()
+
+            if chunks:
+                testi = [c.testo for c in chunks]
+                embeddings = embedder.embed(testi)
+                upsert_chunks(tabella, chunks, embeddings)
+                total_chunks += len(chunks)
+
+            job["filesProcessed"] += 1
+            job["chunksCreated"] = total_chunks
+            job["currentFile"] = None
+            job["updatedAt"] = time.time()
+        except Exception as exc:
+            job["filesFailed"] += 1
+            errors.append({"file": str(filepath.relative_to(batch_root)), "error": str(exc)})
+            job["errors"] = errors
+
+    try:
+        aggiorna_indice_fts_in_background(tabella)
+    except Exception as exc:
+        errors.append({"file": "<fts>", "error": str(exc)})
+        job["errors"] = errors
+
+    job["chunksCreated"] = total_chunks
+    if job["filesProcessed"] == 0:
+        job["status"] = "failed"
+        job["currentFile"] = None
+        job["updatedAt"] = time.time()
+        job["error"] = "Nessun file e' stato indicizzato. Controlla gli errori del job."
+    else:
+        job["status"] = "completed"
+        job["currentFile"] = None
+        job["updatedAt"] = time.time()
+        if errors:
+            job["error"] = f"{len(errors)} file/eventi hanno prodotto errori; gli altri file sono stati processati."
+
+    # Le sorgenti restano nel database per permettere il re-index.
 
 @app.post("/api/ingest")
-def process_ingest(
+async def process_ingest(
     background_tasks: BackgroundTasks,
+    files: Optional[List[UploadFile]] = File(None),
     file: Optional[UploadFile] = File(None),
     path: Optional[str] = Form(None),
     chunkSize: Optional[int] = Form(512),
     chunkOverlap: Optional[int] = Form(15),
     ocrEnabled: Optional[bool] = Form(True),
+    relativePaths: Optional[str] = Form(None),
 ):
-    job_id = str(uuid.uuid4())
+    """Avvia ingest di uno o piu' file caricati dal browser.
+
+    Il campo ``files`` supporta anche la selezione di un'intera cartella
+    tramite ``webkitdirectory``: il browser invia tutti i file e, quando
+    disponibile, ``webkitRelativePath`` conserva la struttura delle
+    sottocartelle.
+
+    ``path`` resta intenzionalmente vietato via HTTP: non si accettano path
+    arbitrari del filesystem del server.
+    """
+    uploaded: List[UploadFile] = list(files or [])
+    if file is not None and not uploaded:
+        uploaded = [file]
+
+    if path:
+        raise HTTPException(status_code=400, detail="L'ingest via API richiede il caricamento dei file.")
+    if not uploaded:
+        raise HTTPException(status_code=400, detail="Seleziona almeno un file o una cartella.")
+    if len(uploaded) > MAX_INGEST_FILES:
+        raise HTTPException(status_code=413, detail=f"Troppi file: massimo {MAX_INGEST_FILES} per ingest.")
+
     captured_db_id = db_manager.active_id
+    try:
+        db_root = Path(db_manager.get_info_for_id(captured_db_id)["path"]).resolve()
+        source_root = db_root / "sources"
+        source_root.mkdir(parents=True, exist_ok=True)
+    except (KeyError, OSError) as exc:
+        raise HTTPException(status_code=500, detail=f"Impossibile preparare lo storage delle sorgenti: {exc}") from exc
+
+    job_id = str(uuid.uuid4())
     ingestion_jobs[job_id] = {
         "status": "pending",
         "chunksCreated": 0,
+        "filesTotal": len(uploaded),
+        "filesProcessed": 0,
+        "filesFailed": 0,
         "databaseId": captured_db_id,
         "error": None,
+        "errors": [],
+        "currentFile": None,
+        "startedAt": time.time(),
+        "updatedAt": time.time(),
     }
 
-    if file:
+    batch_root = source_root / f"upload_{uuid.uuid4().hex}"
+    batch_root.mkdir(parents=True, exist_ok=True)
+
+    saved_files: List[Path] = []
+    total_bytes = 0
+    try:
         try:
-            db_root = Path(db_manager.get_info_for_id(captured_db_id)["path"]).resolve()
-            source_dir = db_root / "sources"
-            source_dir.mkdir(parents=True, exist_ok=True)
-            suffix = Path(file.filename or "upload.bin").suffix[:20]
-            target_path = source_dir / f"upload_{uuid.uuid4().hex}{suffix}"
-            with target_path.open("wb") as f:
-                shutil.copyfileobj(file.file, f)
-        except (KeyError, OSError) as exc:
-            raise HTTPException(status_code=500, detail=f"Impossibile salvare il file caricato: {exc}") from exc
-        background_tasks.add_task(
-            esegui_ingestion_job, job_id, target_path, False, chunkSize, chunkOverlap, ocrEnabled, captured_db_id
-        )
-    elif path:
-        # I percorsi arbitrari sul filesystem non sono accettati via HTTP.
-        # L'ingest web deve passare da UploadFile; il path locale resta
-        # disponibile solo per chiamate interne esplicite fuori da questa API.
-        raise HTTPException(status_code=400, detail="L'ingest via API richiede il caricamento del file.")
-        is_dir = target_path.is_dir()
-        background_tasks.add_task(
-            esegui_ingestion_job, job_id, target_path, is_dir, chunkSize, chunkOverlap, ocrEnabled, captured_db_id
-        )
-    else:
-        raise HTTPException(status_code=400, detail="Specifica un file caricato o un percorso cartella.")
+            relative_map = json.loads(relativePaths) if relativePaths else []
+            if not isinstance(relative_map, list):
+                relative_map = []
+        except json.JSONDecodeError as exc:
+            shutil.rmtree(batch_root, ignore_errors=True)
+            raise HTTPException(status_code=400, detail=f"relativePaths non valido: {exc}") from exc
+
+        if relative_map and len(relative_map) != len(uploaded):
+            shutil.rmtree(batch_root, ignore_errors=True)
+            raise HTTPException(status_code=400, detail="Numero di relativePaths diverso dal numero di file.")
+
+        for index, item in enumerate(uploaded):
+            # webkitRelativePath e' disponibile nei browser moderni quando
+            # l'input usa webkitdirectory. Non fidarsi comunque del path:
+            # vengono conservati solo componenti normali e senza '..'.
+            raw_relative = (relative_map[index] if relative_map else None) or getattr(item, "filename", None) or "upload.bin"
+            relative = Path(str(raw_relative).replace("\\", "/"))
+            safe_parts = [part for part in relative.parts if part not in ("", ".", "..")]
+            if not safe_parts:
+                safe_parts = [f"upload_{uuid.uuid4().hex}.bin"]
+            safe_name = Path(*safe_parts)
+            if safe_name.is_absolute() or ".." in safe_name.parts:
+                raise HTTPException(status_code=400, detail=f"Percorso file non valido: {raw_relative}")
+
+            suffix = Path(str(raw_relative)).suffix.lower()
+            if suffix not in SUPPORTED_INGEST_EXTENSIONS:
+                continue
+            declared_size = getattr(item, "size", None)
+            if isinstance(declared_size, int) and declared_size > MAX_INGEST_FILE_BYTES:
+                raise HTTPException(status_code=413, detail=f"File troppo grande: {raw_relative}")
+            target_path = batch_root / safe_name
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            if target_path.exists():
+                target_path = target_path.with_name(f"{target_path.stem}_{uuid.uuid4().hex[:8]}{target_path.suffix}")
+
+            with target_path.open("wb") as out:
+                shutil.copyfileobj(item.file, out)
+            size = target_path.stat().st_size
+            if size > MAX_INGEST_FILE_BYTES:
+                target_path.unlink(missing_ok=True)
+                raise HTTPException(status_code=413, detail=f"File troppo grande: {raw_relative}")
+            total_bytes += size
+            if total_bytes > MAX_INGEST_TOTAL_BYTES:
+                raise HTTPException(status_code=413, detail=f"Dimensione totale ingest superiore a {MAX_INGEST_TOTAL_BYTES // (1024*1024)} MB")
+            saved_files.append(target_path)
+    except HTTPException:
+        shutil.rmtree(batch_root, ignore_errors=True)
+        raise
+    except OSError as exc:
+        shutil.rmtree(batch_root, ignore_errors=True)
+        raise HTTPException(status_code=500, detail=f"Impossibile salvare i file caricati: {exc}") from exc
+
+    if not saved_files:
+        shutil.rmtree(batch_root, ignore_errors=True)
+        raise HTTPException(status_code=400, detail="Nessun file supportato trovato. Sono supportati PDF e JSON.")
+
+    ingestion_jobs[job_id]["filesTotal"] = len(saved_files)
+    _schedule_ingestion_task(asyncio.to_thread(
+        esegui_ingestion_batch_job, job_id, saved_files, batch_root,
+        chunkSize or 512, chunkOverlap or 15, bool(ocrEnabled), captured_db_id
+    ))
 
     return {
         "jobId": job_id,
         "status": "pending",
-        "message": "Ingest avviato in background",
+        "filesTotal": len(saved_files),
+        "databaseId": captured_db_id,
+        "message": f"Ingest avviato per {len(saved_files)} file.",
     }
 
 
@@ -615,7 +809,10 @@ def process_ingest(
 def get_ingest_status(job_id: str):
     if job_id not in ingestion_jobs:
         raise HTTPException(status_code=404, detail="Job non trovato")
-    return ingestion_jobs[job_id]
+    job = ingestion_jobs[job_id]
+    job["ageSeconds"] = max(0, int(time.time() - job.get("startedAt", time.time())))
+    job["lastUpdateAgeSeconds"] = max(0, int(time.time() - job.get("updatedAt", time.time())))
+    return job
 
 
 def _build_telemetry_snapshot() -> List[Dict[str, Any]]:
