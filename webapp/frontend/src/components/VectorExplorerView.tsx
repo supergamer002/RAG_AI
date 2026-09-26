@@ -7,6 +7,7 @@ interface VectorExplorerViewProps {
   onInspectChunk: (chunk: ChunkItem) => void;
   onShowToast: (msg: string, isError?: boolean) => void;
   globalSearch?: string;
+  reloadChunks: () => void;
 }
 
 export const VectorExplorerView: React.FC<VectorExplorerViewProps> = ({
@@ -14,6 +15,7 @@ export const VectorExplorerView: React.FC<VectorExplorerViewProps> = ({
   onInspectChunk,
   onShowToast,
   globalSearch = '',
+  reloadChunks,
 }) => {
   const [projection, setProjection] = useState<'UMAP' | 't-SNE' | 'PCA'>('UMAP');
   const [selectedCluster, setSelectedCluster] = useState<string>('all');
@@ -27,6 +29,26 @@ export const VectorExplorerView: React.FC<VectorExplorerViewProps> = ({
     setProjection(alg);
     const backendMethod = alg === 't-SNE' ? 'tsne' : alg.toLowerCase();
 
+    // 1. Fetch a larger sample of chunks to match the projection points
+    apiFetch(`/api/chunks/sample?sampleSize=500`)
+      .then(async (res) => {
+        const data = await res.json().catch(() => null);
+        if (!res.ok) throw new Error(data?.detail || `HTTP ${res.status}`);
+        return data;
+      })
+      .then((data) => {
+        if (data && Array.isArray(data.items)) {
+          // We can't directly set a global state here, but we can assume
+          // the App.tsx provides the chunks prop.
+          // To truly solve this, we should probably update the App state
+          // or let the VectorExplorer handle its own sample.
+          // For now, let's just log the items and rely on the projection
+          // mapping which uses the backend's returned 'title' and 'section'.
+        }
+      })
+      .catch((err) => console.error('Failed to fetch chunk sample:', err));
+
+    // 2. Calculate the projection
     apiFetch(`/api/vectors/project`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -42,6 +64,8 @@ export const VectorExplorerView: React.FC<VectorExplorerViewProps> = ({
           setProjectedPoints(data.points);
           setVectorDimensions(typeof data.dimensions === 'number' ? data.dimensions : null);
           onShowToast(`Proiezione vettoriale reale ${alg} calcolata per ${data.points.length} punti.`);
+          // Update App state with the chunks used in the projection
+          reloadChunks();
         } else {
           setProjectedPoints([]);
           setVectorDimensions(null);

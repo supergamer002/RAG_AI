@@ -40,7 +40,9 @@ export const DatabaseManagerModal: React.FC<DatabaseManagerModalProps> = ({
           setDatabases(data.databases || []);
         }
       })
-      .catch(() => {});
+      .catch((err) => {
+        onShowToast(`Errore caricamento database: ${err instanceof Error ? err.message : 'errore sconosciuto'}`, true);
+      });
   };
 
   useEffect(() => {

@@ -28,8 +28,9 @@ from rag.common.monitoring import tracciatore_globale
 from rag.common.schema import Chunk, TipoFonte, stima_token
 from rag.index.db_manager import db_manager
 from rag.index.embed import OllamaEmbedder
+from rag.index.embed_manager import embedder_manager
 from rag.index.store import upsert_chunks, conta_chunk
-from rag.retrieve.hybrid_search import ricerca_ibrida, crea_indice_fulltext, aggiorna_indice_fts_in_background
+from rag.retrieve.hybrid_search import ricerca_ibrida, crea_indice_fulltext
 from rag.retrieve.rerank import CrossEncoderReranker
 from rag.generate.answer import rispondi, OllamaGenerator
 from rag.ingest.from_units import ingest_file_unita, ingest_cartella_unita
@@ -115,8 +116,7 @@ app.add_middleware(
 )
 
 # Inizializzazione risorse
-embedder_url = f"{config.get('ollamaUrl', 'http://localhost:11434').rstrip('/')}/api/embed"
-embedder = OllamaEmbedder(url=embedder_url, modello=config.get("embeddingModel", "qwen3-embedding:0.6b"))
+# L'embedder e' ora gestito dinamicamente per database via embedder_manager
 reranker = CrossEncoderReranker(modello=config.get("crossEncoderModel", "BAAI/bge-reranker-v2-m3"))
 generatore_url = f"{config.get('ollamaUrl', 'http://localhost:11434').rstrip('/')}/api/chat"
 generatore = OllamaGenerator(url=generatore_url)
@@ -183,12 +183,32 @@ def read_root():
 @app.get("/api/health")
 def get_health():
     ollama_ok = False
+    ollama_detail = "Non raggiungibile"
     try:
         import requests
         r = requests.get(config.get("ollamaUrl", "http://localhost:11434"), timeout=2)
-        ollama_ok = r.status_code == 200
-    except Exception:
-        ollama_ok = False
+        if r.status_code == 200:
+            ollama_ok = True
+            ollama_detail = "OK"
+            # Verifica modello embedding
+            try:
+                emb_model = config.get("embeddingModel", "qwen3-embedding:0.6b")
+                # Chiamata minima a /api/embed per verificare modello e connessione
+                emb_res = requests.post(
+                    f"{config.get('ollamaUrl', 'http://localhost:11434').rstrip('/')}/api/embed",
+                    json={"model": emb_model, "input": "health check"},
+                    timeout=2
+                )
+                if emb_res.status_code != 200:
+                    ollama_ok = False
+                    ollama_detail = f"Modello embedding {emb_model} non disponibile ({emb_res.status_code})"
+            except Exception as e:
+                ollama_ok = False
+                ollama_detail = f"Errore verifica embedding: {str(e)}"
+        else:
+            ollama_detail = f"Risposta HTTP {r.status_code}"
+    except Exception as e:
+        ollama_detail = f"Errore connessione: {str(e)}"
 
     lancedb_ok = True
     try:
@@ -201,6 +221,7 @@ def get_health():
         "fastapi": True,
         "lancedb": lancedb_ok,
         "ollama": ollama_ok,
+        "ollama_detail": ollama_detail,
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
 
@@ -324,10 +345,8 @@ def execute_query(req: QueryRequest):
     try:
         tabella = db_manager.get_active_table()
         if tabella.count_rows() == 0:
-            raise HTTPException(
-                status_code=409,
-                detail="Il database attivo non contiene chunk indicizzati. Completa un ingest riuscito prima di eseguire una query.",
-            )
+            return {"answer": "", "chunks": []}
+
         risultato = _esegui_query_su_tabella(req, tabella)
         risultato.pop("queryEmbedding", None)
         return risultato
@@ -444,7 +463,7 @@ def reindex_document(document_id: str, background_tasks: BackgroundTasks):
         )
     else:
         tabella = db_manager.get_active_table()
-        background_tasks.add_task(aggiorna_indice_fts_in_background, tabella)
+        background_tasks.add_task(crea_indice_fulltext, tabella)
         ingestion_jobs[job_id]["status"] = "completed"
 
     return {
@@ -511,6 +530,21 @@ def get_chunk_vector(chunk_id: str):
     }
 
 
+@app.get("/api/chunks/sample")
+def get_chunks_sample(sampleSize: int = Query(500, ge=1, le=1000)):
+    """Restituisce un campione di chunk per la proiezione vettoriale.
+    Include tutti i metadati necessari per evitare chiamate multiple.
+    """
+    tabella = db_manager.get_active_table()
+    righe = tabella.search().limit(sampleSize).to_list()
+
+    mapped = [mappa_chunk_item(r, idx, {}) for idx, r in enumerate(righe)]
+    return {
+        "items": mapped,
+        "total": len(righe),
+    }
+
+
 def _schedule_ingestion_task(coro) -> None:
     task = asyncio.create_task(coro)
     _ingestion_tasks.add(task)
@@ -568,7 +602,7 @@ def _esegui_ingestion_job_sync(
             target_db_id = database_id or db_manager.active_id
             tabella = db_manager.get_table_for_db(target_db_id)
             _indicizza_chunks_incrementale(tabella, chunks, ingestion_jobs[job_id])
-            aggiorna_indice_fts_in_background(tabella)
+            crea_indice_fulltext(tabella)
 
         ingestion_jobs[job_id]["status"] = "completed"
         ingestion_jobs[job_id]["chunksCreated"] = len(chunks)
@@ -607,7 +641,13 @@ def _indicizza_chunks_incrementale(
         if not batch:
             continue
         try:
-            embeddings = embedder.embed([c.testo for c in batch])
+            # Use embedder tied to the active database
+            active_info = db_manager.get_active_info()
+            emb_model = active_info.get("embeddingModel", config.get("embeddingModel", "qwen3-embedding:0.6b"))
+            emb_url = f"{config.get('ollamaUrl', 'http://localhost:11434').rstrip('/')}/api/embed"
+            current_embedder = embedder_manager.get_embedder(emb_model, emb_url)
+
+            embeddings = current_embedder.embed([c.testo for c in batch])
             inseriti = upsert_chunks(tabella, batch, embeddings)
         except Exception as exc:
             raise RuntimeError(
@@ -674,7 +714,7 @@ def esegui_ingestion_batch_job(
             # Il path indicizzato e' relativo al database, mai assoluto.
             relative_source = filepath.resolve().relative_to(source_root.resolve())
             for chunk in chunks:
-                chunk.fonte_path = str(relative_source).replace("\\", "/")
+                chunk.fonte_path = str(Path("sources") / relative_source).replace("\\", "/")
                 chunk.ricalcola_id()
 
             if chunks:
@@ -690,18 +730,18 @@ def esegui_ingestion_batch_job(
             errors.append({"file": str(filepath.relative_to(batch_root)), "error": str(exc)})
             job["errors"] = errors
 
-    try:
-        aggiorna_indice_fts_in_background(tabella)
-    except Exception as exc:
-        errors.append({"file": "<fts>", "error": str(exc)})
-        job["errors"] = errors
+        try:
+            crea_indice_fulltext(tabella)
+        except Exception as exc:
+            errors.append({"file": "<fts>", "error": str(exc)})
+            job["errors"] = errors
 
     job["chunksCreated"] = total_chunks
-    if job["filesProcessed"] == 0:
+    if job["filesProcessed"] == 0 or total_chunks == 0:
         job["status"] = "failed"
         job["currentFile"] = None
         job["updatedAt"] = time.time()
-        job["error"] = "Nessun file e' stato indicizzato. Controlla gli errori del job."
+        job["error"] = "Nessun chunk è stato generato dai file elaborati. Controlla i contenuti dei documenti." if total_chunks == 0 else "Nessun file e' stato indicizzato. Controlla gli errori del job."
     else:
         job["status"] = "completed"
         job["currentFile"] = None
@@ -740,6 +780,22 @@ async def process_ingest(
         raise HTTPException(status_code=400, detail="L'ingest via API richiede il caricamento dei file.")
     if not uploaded:
         raise HTTPException(status_code=400, detail="Seleziona almeno un file o una cartella.")
+
+    # Enforce maxPayloadMB from config
+    total_payload_size = 0
+    for f in uploaded:
+        # UploadFile has a file object with a seekable stream
+        f.file.seek(0, os.SEEK_END)
+        total_payload_size += f.file.tell()
+        f.file.seek(0)
+
+    max_mb = config.get("maxPayloadMB", 50)
+    if total_payload_size > max_mb * 1024 * 1024:
+        raise HTTPException(
+            status_code=413,
+            detail=f"La dimensione totale del payload ({total_payload_size // (1024*1024)} MB) supera il limite massimo configurato di {max_mb} MB."
+        )
+
     if len(uploaded) > MAX_INGEST_FILES:
         raise HTTPException(status_code=413, detail=f"Troppi file: massimo {MAX_INGEST_FILES} per ingest.")
 
@@ -936,10 +992,12 @@ def restart_runtime():
     Questo endpoint NON riavvia il processo FastAPI né invia segnali al worker:
     aggiorna solamente gli oggetti runtime che dipendono dalla configurazione.
     """
-    global config, embedder, reranker, generatore
+    global config, reranker, generatore
     config = caricaconfig()
-    embedder_url = f"{config.get('ollamaUrl', 'http://localhost:11434').rstrip('/')}/api/embed"
-    embedder = OllamaEmbedder(url=embedder_url, modello=config.get("embeddingModel", "qwen3-embedding:0.6b"))
+    # Aggiorna il DatabaseManager per riflettere eventuali modifiche a storagePath
+    db_manager._load_registry()
+    # L'embedder e' ora gestito dinamicamente per database via embedder_manager
+    # Non è più necessaria l'istanza globale embedder a livello di modulo
     reranker = CrossEncoderReranker(modello=config.get("crossEncoderModel", "BAAI/bge-reranker-v2-m3"))
     generatore_url = f"{config.get('ollamaUrl', 'http://localhost:11434').rstrip('/')}/api/chat"
     generatore = OllamaGenerator(url=generatore_url)
@@ -1192,7 +1250,12 @@ def _esegui_query_su_tabella(req: QueryRequest, tabella: Any) -> Dict[str, Any]:
 
     query_emb = None
     if search_mode != "sparse":
-        query_emb = embedder.embed_uno(req.query)
+        # Use embedder tied to the active database
+        active_info = db_manager.get_active_info()
+        emb_model = active_info.get("embeddingModel", config.get("embeddingModel", "qwen3-embedding:0.6b"))
+        emb_url = f"{config.get('ollamaUrl', 'http://localhost:11434').rstrip('/')}/api/embed"
+        current_embedder = embedder_manager.get_embedder(emb_model, emb_url)
+        query_emb = current_embedder.embed_uno(req.query)
 
     try:
         if search_mode == "dense":
@@ -1297,6 +1360,40 @@ async def run_evaluations(background_tasks: BackgroundTasks):
 
             for test_case in EVAL_TEST_CASES:
                 try:
+                    # Verify if the expected document actually exists in the active database
+                    # If it doesn't, mark the case as 'Skipped' to avoid misleading 'Not found' results
+                    doc_exists = any(test_case["expectedDoc"] in d["sourcePath"] for d in db_manager.get_documents())
+                    if not doc_exists:
+                        case_res = {
+                            **test_case,
+                            "status": "Skipped",
+                            "error": "Documento atteso non presente nel database attivo.",
+                            "retrievedDocs": [],
+                            "contextPrecision": None,
+                            "contextRecall": None,
+                            "answerRelevance": None,
+                            "faithfulness": None,
+                            "retrievalMatch": 0.0,
+                        }
+                        case_results.append(case_res)
+                        # Update progress as completed but skipped
+                        eval_jobs[job_id]["testCases"].append({
+                            "id": test_case["id"],
+                            "query": test_case["query"],
+                            "status": "completed",
+                            "result": "Skipped"
+                        })
+                        eval_jobs[job_id]["updatedAt"] = time.time()
+                        continue
+
+                    # PROGRESS UPDATE: update the job state for each case
+                    eval_jobs[job_id]["testCases"].append({
+                        "id": test_case["id"],
+                        "query": test_case["query"],
+                        "status": "running"
+                    })
+                    eval_jobs[job_id]["updatedAt"] = time.time()
+
                     risultato = _esegui_query_su_tabella(
                         QueryRequest(query=test_case["query"], topK=20, topN=6, searchMode="hybrid", hybridAlpha=0.7, enableRerank=True),
                         tabella,
@@ -1309,7 +1406,14 @@ async def run_evaluations(background_tasks: BackgroundTasks):
                     precision = _context_precision(flags)
                     recall = _context_recall(flags)
                     query_embedding = risultato.get("queryEmbedding") or []
-                    answer_embedding = embedder.embed_uno(risultato.get("answer", ""))
+
+                    # Use embedder tied to the active database
+                    active_info = db_manager.get_active_info()
+                    emb_model = active_info.get("embeddingModel", config.get("embeddingModel", "qwen3-embedding:0.6b"))
+                    emb_url = f"{config.get('ollamaUrl', 'http://localhost:11434').rstrip('/')}/api/embed"
+                    current_embedder = embedder_manager.get_embedder(emb_model, emb_url)
+                    answer_embedding = current_embedder.embed_uno(risultato.get("answer", ""))
+
                     relevance = round(_cosine_similarity(query_embedding, answer_embedding), 4)
                     faithfulness = _valuta_faithfulness(
                         test_case["query"],
@@ -1317,7 +1421,7 @@ async def run_evaluations(background_tasks: BackgroundTasks):
                         [c.get("text", "") for c in chunks if c.get("text")],
                     )
                     found = any(flags)
-                    case_results.append({
+                    case_res = {
                         **test_case,
                         "retrievedDocs": list(dict.fromkeys(c.get("docTitle", "Documento") for c in chunks)),
                         "contextPrecision": precision,
@@ -1327,7 +1431,16 @@ async def run_evaluations(background_tasks: BackgroundTasks):
                         "retrievalMatch": round((precision + recall) / 2.0, 4),
                         "status": "Found" if found else "Not found",
                         "error": None,
-                    })
+                    }
+                    case_results.append(case_res)
+
+                    # PROGRESS UPDATE: mark case as completed
+                    for tc in eval_jobs[job_id]["testCases"]:
+                        if tc["id"] == test_case["id"]:
+                            tc["status"] = "completed"
+                            tc["result"] = case_res["status"]
+                            break
+                    eval_jobs[job_id]["updatedAt"] = time.time()
                 except Exception as exc:
                     case_results.append({
                         **test_case,

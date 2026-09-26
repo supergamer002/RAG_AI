@@ -49,7 +49,9 @@ export const ChunkModal: React.FC<ChunkModalProps> = ({
             setRealVector(data.vector);
           }
         })
-        .catch(() => {});
+        .catch((err) => {
+          onShowToast(`Errore caricamento vettore: ${err instanceof Error ? err.message : 'errore sconosciuto'}`, true);
+        });
     }
     setShowVectorRaw(!showVectorRaw);
   };

@@ -35,7 +35,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         setIsTesting(false);
         onTestConnections();
       })
-      .catch(() => {
+      .catch((err) => {
         setIsTesting(false);
         onTestConnections();
       });
@@ -50,7 +50,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         await res.json();
         onRestartWorker();
       })
-      .catch(() => {
+      .catch((err) => {
         onRestartWorker();
       });
   };
@@ -873,27 +873,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="flex items-center justify-between bg-[#0a0e18] p-4 rounded-lg border border-[#262a35] shadow-inner">
-                    <div className="flex flex-col pr-2">
-                      <span className="text-[13px] text-[#dfe2f1] font-semibold">
-                        Estrazione Tabelle &amp; Immagini
-                      </span>
-                      <span className="font-mono text-[11px] text-[#bcc9cd]">
-                        OCR &amp; Layout Engine Docling
-                      </span>
-                    </div>
-                    <label className="relative inline-flex items-center cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={settings.ocrTablesExtraction}
-                        onChange={(e) =>
-                          onUpdateSettings({ ocrTablesExtraction: e.target.checked })
-                        }
-                        className="sr-only peer"
-                      />
-                      <div className="w-11 h-6 bg-[#262a35] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white peer-checked:bg-[#4cd7f6] after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-[#003640] after:border-[#1c1f2a] after:border after:rounded-full after:h-5 after:w-5 after:transition-all" />
-                    </label>
-                  </div>
 
                   <div className="flex flex-col gap-1.5">
                     <label className="font-mono text-[11px] text-[#bcc9cd] uppercase tracking-wider font-semibold">

@@ -41,14 +41,14 @@ export default function App() {
       .then((data) => {
         if (data) setSettings((prev) => ({ ...prev, ...data }));
       })
-      .catch(() => {});
+      .catch((err) => showToast(`Errore caricamento impostazioni: ${err.message}`, true));
 
     apiFetch(`/api/documents`)
       .then((res) => res.ok ? res.json() : null)
       .then((data) => {
         if (Array.isArray(data)) setDocuments(data);
       })
-      .catch(() => {});
+      .catch((err) => showToast(`Errore caricamento documenti: ${err.message}`, true));
 
     apiFetch(`/api/chunks?page=1&pageSize=20`)
       .then((res) => res.ok ? res.json() : null)
@@ -58,7 +58,7 @@ export default function App() {
           if (data.items.length > 0) setSelectedChunk(data.items[0]);
         }
       })
-      .catch(() => {});
+      .catch((err) => showToast(`Errore caricamento chunk: ${err.message}`, true));
 
     apiFetch(`/api/telemetry`)
       .then((res) => res.ok ? res.json() : null)
@@ -71,14 +71,14 @@ export default function App() {
           setAvgLatencyMs(durations.length ? durations.reduce((a, b) => a + b, 0) / durations.length : null);
         }
       })
-      .catch(() => {});
+      .catch((err) => showToast(`Errore telemetria: ${err.message}`, true));
 
     apiFetch(`/api/eval`)
       .then((res) => res.ok ? res.json() : null)
       .then((data) => {
         if (Array.isArray(data)) setEvalMetrics(data);
       })
-      .catch(() => {});
+      .catch((err) => showToast(`Errore caricamento valutazioni: ${err.message}`, true));
 
     setChunksCount(null);
     setStorageBytes(null);
@@ -90,6 +90,17 @@ export default function App() {
           setChunksCount(typeof data.chunks === 'number' && Number.isFinite(data.chunks) ? data.chunks : null);
           setStorageBytes(typeof data.storageBytes === 'number' && Number.isFinite(data.storageBytes) ? data.storageBytes : null);
           setActiveDatabaseName(data.activeDatabase?.name ?? null);
+        }
+      })
+      .catch(() => {});
+  };
+
+  const reloadChunksSample = () => {
+    apiFetch(`/api/chunks/sample?sampleSize=500`)
+      .then((res) => res.ok ? res.json() : null)
+      .then((data) => {
+        if (data && Array.isArray(data.items)) {
+          setChunks(data.items);
         }
       })
       .catch(() => {});
@@ -324,6 +335,7 @@ export default function App() {
               onInspectChunk={handleInspectChunk}
               onShowToast={showToast}
               globalSearch={searchFilter}
+              reloadChunks={reloadChunksSample}
             />
           )}
 

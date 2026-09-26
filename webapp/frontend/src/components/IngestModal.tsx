@@ -47,8 +47,11 @@ export const IngestModal: React.FC<IngestModalProps> = ({
       method: 'POST',
       body: formData,
     })
-      .then((res) => {
-        if (!res.ok) throw new Error('Errore nella richiesta di ingest');
+      .then(async (res) => {
+        if (!res.ok) {
+          const body = await res.json().catch(() => null);
+          throw new Error(body?.detail || `HTTP ${res.status}`);
+        }
         return res.json();
       })
       .then((data) => {

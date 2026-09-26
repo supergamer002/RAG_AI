@@ -63,7 +63,7 @@ def test_documents_and_chunks_endpoints(client):
 
 
 def test_query_endpoint(client, monkeypatch):
-    monkeypatch.setattr("webapp.backend.main.embedder.embed_uno", lambda q: [0.1] * 1024)
+    monkeypatch.setattr("webapp.backend.main.embedder_manager.get_embedder", lambda m, u: MagicMock(embed_uno=lambda q: [0.1] * 1024, embed=lambda t: [[0.1] * 1024] * len(t)))
     res = client.post("/api/query", json={"query": "Test chimica legame ionico", "topK": 5, "topN": 2})
     assert res.status_code == 200
     data = res.json()
@@ -72,7 +72,7 @@ def test_query_endpoint(client, monkeypatch):
 
 
 def test_query_endpoint_modes(client, monkeypatch):
-    monkeypatch.setattr("webapp.backend.main.embedder.embed_uno", lambda q: [0.1] * 1024)
+    monkeypatch.setattr("webapp.backend.main.embedder_manager.get_embedder", lambda m, u: MagicMock(embed_uno=lambda q: [0.1] * 1024, embed=lambda t: [[0.1] * 1024] * len(t)))
     res_dense = client.post("/api/query", json={"query": "Test dense", "searchMode": "dense", "enableRerank": False})
     assert res_dense.status_code == 200
 
