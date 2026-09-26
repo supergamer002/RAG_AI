@@ -1,0 +1,9 @@
+fastapi[standard]
+uvicorn[standard]
+numpy
+scikit-learn
+lancedb
+python-multipart
+pydantic
+FlagEmbedding
+torch

@@ -43,9 +43,19 @@ class OllamaEmbedder:
             "input": testi,
             "dimensions": self.dimensione,
         }
-        risposta = requests.post(self.url, json=payload, timeout=self.timeout)
-        risposta.raise_for_status()
-        corpo = risposta.json()
+        try:
+            risposta = requests.post(self.url, json=payload, timeout=self.timeout)
+            risposta.raise_for_status()
+        except requests.RequestException as exc:
+            base = self.url.rsplit("/api/embed", 1)[0]
+            raise RuntimeError(
+                f"Ollama embedding non raggiungibile o modello '{self.modello}' non disponibile "
+                f"({base}). Dettaglio: {exc}"
+            ) from exc
+        try:
+            corpo = risposta.json()
+        except ValueError as exc:
+            raise RuntimeError(f"Ollama embedding ha restituito una risposta non JSON: {risposta.text[:300]}") from exc
 
         embeddings = corpo.get("embeddings")
         if embeddings is None or len(embeddings) != len(testi):

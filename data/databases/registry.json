@@ -1,12 +1,21 @@
 {
-  "activeDatabase": "default",
+  "activeDatabase": "db_5436b932",
   "databases": [
     {
       "id": "default",
-      "name": "Database Primario RAG",
+      "name": "Ingegneria Chimica",
       "folderName": "default_lancedb",
       "createdAt": "2026-09-25 14:51:44",
-      "updatedAt": "2026-09-25 14:51:44",
+      "updatedAt": "2026-09-26 02:17:31",
+      "embeddingModel": "qwen3-embedding:0.6b",
+      "dimension": 1024
+    },
+    {
+      "id": "db_5436b932",
+      "name": "testdb",
+      "folderName": "db_5436b932",
+      "createdAt": "2026-09-26 02:51:01",
+      "updatedAt": "2026-09-26 02:51:06",
       "embeddingModel": "qwen3-embedding:0.6b",
       "dimension": 1024
     }

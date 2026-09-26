@@ -21,50 +21,64 @@ export const EvaluationsView: React.FC<EvaluationsViewProps> = ({
 
   const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
-  const handleRunSuite = () => {
+  const handleRunSuite = async () => {
     setIsRunningEval(true);
-    apiFetch(`/api/eval/run`, { method: 'POST' })
-      .then((res) => {
-        if (!res.ok) throw new Error('Errore avvio benchmark');
-        return res.json();
-      })
-      .then((data) => {
-        const jobId = data.jobId;
-        const interval = setInterval(() => {
-          apiFetch(`/api/eval/status/${jobId}`)
-            .then(async (res) => {
-              const statusData = await res.json().catch(() => null);
-              if (!res.ok) throw new Error(statusData?.detail || `HTTP ${res.status}`);
-              return statusData;
-            })
-            .then((statusData) => {
-              if (statusData && ['completed', 'completed_with_errors', 'failed'].includes(statusData.status)) {
-                clearInterval(interval);
-                setIsRunningEval(false);
-                if (Array.isArray(statusData.results)) {
-                  // Le metriche arrivano dal backend e rappresentano l'ultima esecuzione reale.
-                  if (Array.isArray(statusData.results)) setLiveMetrics(statusData.results);
-                  onShowToast(
-                    statusData.status === 'failed'
-                      ? `Valutazione non completata: ${statusData.error || 'errore sconosciuto'}`
-                      : `Valutazione completata: ${statusData.results.length} metriche calcolate${statusData.error ? ` (${statusData.error})` : ''}.`,
-                    statusData.status === 'failed'
-                  );
-                }
-                if (Array.isArray(statusData.testCases)) setTestCases(statusData.testCases);
-              }
-            })
-            .catch((err) => {
-              clearInterval(interval);
-              setIsRunningEval(false);
-              onShowToast(`Errore nel monitoraggio benchmark: ${err instanceof Error ? err.message : 'errore sconosciuto'}`, true);
-            });
-        }, 800);
-      })
-      .catch((err) => {
-        setIsRunningEval(false);
-        onShowToast(`Impossibile eseguire la valutazione: ${err.message}`, true);
-      });
+    setTestCases([]);
+    try {
+      const data = await apiJson<{ jobId: string }>('/api/eval/run', { method: 'POST' });
+      const jobId = data.jobId;
+      const startedAt = Date.now();
+      let pollErrors = 0;
+
+      const poll = async (): Promise<void> => {
+        if (Date.now() - startedAt > 30 * 60 * 1000) {
+          setIsRunningEval(false);
+          onShowToast('Il benchmark sta impiegando oltre 30 minuti. Il job resta consultabile dal backend.', true);
+          return;
+        }
+
+        try {
+          const statusData = await apiJson<any>(`/api/eval/status/${jobId}`);
+          pollErrors = 0;
+
+          if (Array.isArray(statusData.testCases)) {
+            setTestCases(statusData.testCases);
+          }
+          if (Array.isArray(statusData.results)) {
+            setLiveMetrics(statusData.results);
+          }
+
+          if (['completed', 'completed_with_errors', 'failed'].includes(statusData.status)) {
+            setIsRunningEval(false);
+            onShowToast(
+              statusData.status === 'failed'
+                ? `Benchmark non completato: ${statusData.error || 'errore sconosciuto'}`
+                : `Benchmark completato: ${statusData.results?.length || 0} metriche calcolate${statusData.error ? ` (${statusData.error})` : ''}.`,
+              statusData.status === 'failed'
+            );
+            return;
+          }
+
+          window.setTimeout(() => void poll(), 1000);
+        } catch (err) {
+          pollErrors += 1;
+          if (pollErrors >= 5) {
+            setIsRunningEval(false);
+            onShowToast(
+              `Errore nel monitoraggio benchmark: ${err instanceof Error ? err.message : 'errore sconosciuto'}`,
+              true
+            );
+            return;
+          }
+          window.setTimeout(() => void poll(), Math.min(5000, 1000 * pollErrors));
+        }
+      };
+
+      await poll();
+    } catch (err) {
+      setIsRunningEval(false);
+      onShowToast(`Impossibile avviare il benchmark: ${err instanceof Error ? err.message : 'errore sconosciuto'}`, true);
+    }
   };
 
   return (

@@ -83,6 +83,9 @@ class CrossEncoderReranker:
         def _esegui():
             testi = [c["testo"] for c in candidati]
             punteggi = self._calcola_punteggi(query, testi)
+            # FlagEmbedding may return a single float for one candidate; ensure list
+            if not isinstance(punteggi, list):
+                punteggi = [float(punteggi)]
             return _ordina_per_punteggio(candidati, punteggi, top_n)
 
         if tracciatore:

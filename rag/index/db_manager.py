@@ -20,7 +20,25 @@ import lancedb
 from rag.index.store import connetti, apri_o_crea_tabella
 from rag.retrieve.hybrid_search import crea_indice_fulltext
 
-BASE_DB_DIR = Path("data/databases")
+def _load_storage_path() -> Path:
+    """Load storagePath from backend config if present, else default.
+    This makes the DatabaseManager respect the UI's storagePath setting.
+    """
+    config_path = Path("webapp/backend/config.json")
+    try:
+        if config_path.exists():
+            with config_path.open("r", encoding="utf-8") as f:
+                cfg = json.load(f)
+                sp = cfg.get("storagePath")
+                if sp:
+                    return Path(sp)
+    except Exception:
+        pass
+    return Path("data/databases")
+
+# Base directory for databases, now derived from config when possible
+BASE_DB_DIR = _load_storage_path()
+
 REGISTRY_PATH = BASE_DB_DIR / "registry.json"
 
 

@@ -317,12 +317,28 @@ def import_database(file: UploadFile = File(...), name: Optional[str] = Form(Non
 
 @app.post("/api/query")
 def execute_query(req: QueryRequest):
+    query = (req.query or "").strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="La query non puo' essere vuota.")
+
     try:
-        risultato = _esegui_query_su_tabella(req, db_manager.get_active_table())
+        tabella = db_manager.get_active_table()
+        if tabella.count_rows() == 0:
+            raise HTTPException(
+                status_code=409,
+                detail="Il database attivo non contiene chunk indicizzati. Completa un ingest riuscito prima di eseguire una query.",
+            )
+        risultato = _esegui_query_su_tabella(req, tabella)
         risultato.pop("queryEmbedding", None)
         return risultato
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=503, detail=str(e))
+        logging.exception("Query RAG fallita")
+        raise HTTPException(
+            status_code=503,
+            detail=f"Pipeline RAG non disponibile: {type(e).__name__}: {e}",
+        ) from e
 
 
 def _format_file_size(size_bytes: int) -> str:
@@ -358,7 +374,7 @@ def get_documents():
 
         if doc_id not in per_doc:
             ext = Path(path_str).suffix.upper().replace(".", "") if path_str else "PDF"
-            doc_type = ext if ext in ["PDF", "DOCX", "PYTHON", "YAML", "MARKDOWN"] else "PDF"
+            doc_type = ext if ext in ["PDF", "DOCX", "PYTHON", "YAML", "MARKDOWN", "JSON"] else "PDF"
 
             per_doc[doc_id] = {
                 "id": doc_id,
@@ -549,15 +565,9 @@ def _esegui_ingestion_job_sync(
                         chunk.ricalcola_id()
                 except (KeyError, OSError, ValueError):
                     pass
-            testi = [c.testo for c in chunks]
-            try:
-                embeddings = embedder.embed(testi)
-            except Exception as e:
-                raise RuntimeError(f"Servizio embedding non disponibile ({e})")
-
             target_db_id = database_id or db_manager.active_id
             tabella = db_manager.get_table_for_db(target_db_id)
-            upsert_chunks(tabella, chunks, embeddings)
+            _indicizza_chunks_incrementale(tabella, chunks, ingestion_jobs[job_id])
             aggiorna_indice_fts_in_background(tabella)
 
         ingestion_jobs[job_id]["status"] = "completed"
@@ -577,6 +587,37 @@ def _esegui_ingestion_job_sync(
 async def esegui_ingestion_job(*args, **kwargs):
     await asyncio.to_thread(_esegui_ingestion_job_sync, *args, **kwargs)
 
+
+
+
+def _indicizza_chunks_incrementale(
+    tabella: Any,
+    chunks: Sequence[Chunk],
+    job: Dict[str, Any],
+    batch_size: int = 32,
+) -> int:
+    """Genera embedding e salva i chunk a piccoli batch.
+
+    In questo modo un errore Ollama dopo N batch non annulla il lavoro già
+    scritto in LanceDB: i chunk gia' indicizzati restano disponibili.
+    """
+    totale = 0
+    for start in range(0, len(chunks), batch_size):
+        batch = list(chunks[start:start + batch_size])
+        if not batch:
+            continue
+        try:
+            embeddings = embedder.embed([c.testo for c in batch])
+            inseriti = upsert_chunks(tabella, batch, embeddings)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Embedding/indicizzazione fallita al batch "
+                f"{start + 1}-{start + len(batch)} di {len(chunks)}: {exc}"
+            ) from exc
+        totale += inseriti
+        job["chunksCreated"] = job.get("chunksCreated", 0) + inseriti
+        job["updatedAt"] = time.time()
+    return totale
 
 
 def esegui_ingestion_batch_job(
@@ -637,10 +678,8 @@ def esegui_ingestion_batch_job(
                 chunk.ricalcola_id()
 
             if chunks:
-                testi = [c.testo for c in chunks]
-                embeddings = embedder.embed(testi)
-                upsert_chunks(tabella, chunks, embeddings)
-                total_chunks += len(chunks)
+                indicizzati = _indicizza_chunks_incrementale(tabella, chunks, job)
+                total_chunks += indicizzati
 
             job["filesProcessed"] += 1
             job["chunksCreated"] = total_chunks
@@ -919,7 +958,13 @@ class VectorProjectRequest(BaseModel):
 def project_vectors(req: VectorProjectRequest):
     tabella = db_manager.get_active_table()
     sample_size = req.sampleSize or 500
-    method = (req.method or "umap").lower()
+    method = (req.method or "umap").lower().replace("-", "").replace("_", "")
+
+    if method not in {"umap", "tsne", "pca"}:
+        raise HTTPException(
+            status_code=400,
+            detail="Metodo di proiezione non valido. Usare: umap, tsne o pca.",
+        )
 
     righe = tabella.search().limit(sample_size).to_list()
     if not righe:
@@ -1012,6 +1057,7 @@ def project_vectors(req: VectorProjectRequest):
 
 eval_results_cache: List[Dict[str, Any]] = []
 eval_jobs: Dict[str, Dict[str, Any]] = {}
+_eval_tasks: set[asyncio.Task] = set()
 
 EVAL_TEST_CASES: List[Dict[str, str]] = [
     {
@@ -1233,7 +1279,7 @@ def get_eval_status(job_id: str):
 
 
 @app.post("/api/eval/run")
-def run_evaluations(background_tasks: BackgroundTasks):
+async def run_evaluations(background_tasks: BackgroundTasks):
     job_id = str(uuid.uuid4())
     captured_db_id = db_manager.active_id
     eval_jobs[job_id] = {
@@ -1335,7 +1381,9 @@ def run_evaluations(background_tasks: BackgroundTasks):
                 "error": str(exc),
             }
 
-    background_tasks.add_task(_worker)
+    task = asyncio.create_task(asyncio.to_thread(_worker))
+    _eval_tasks.add(task)
+    task.add_done_callback(_eval_tasks.discard)
     return {
         "jobId": job_id,
         "status": "running",

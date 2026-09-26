@@ -1,5 +1,5 @@
 import { apiFetch, apiJson, apiUrl, getApiToken, setApiToken } from '../api';
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ChunkItem } from '../types';
 
 interface VectorExplorerViewProps {
@@ -25,14 +25,17 @@ export const VectorExplorerView: React.FC<VectorExplorerViewProps> = ({
 
   const handleSelectAlgorithm = (alg: 'UMAP' | 't-SNE' | 'PCA') => {
     setProjection(alg);
+    const backendMethod = alg === 't-SNE' ? 'tsne' : alg.toLowerCase();
+
     apiFetch(`/api/vectors/project`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ method: alg.toLowerCase() }),
+      body: JSON.stringify({ method: backendMethod, sampleSize: 500 }),
     })
-      .then((res) => {
-        if (!res.ok) throw new Error('Errore nel calcolo della proiezione');
-        return res.json();
+      .then(async (res) => {
+        const data = await res.json().catch(() => null);
+        if (!res.ok) throw new Error(data?.detail || `HTTP ${res.status}`);
+        return data;
       })
       .then((data) => {
         if (data && Array.isArray(data.points) && data.points.length > 0) {
@@ -47,8 +50,24 @@ export const VectorExplorerView: React.FC<VectorExplorerViewProps> = ({
         }
       })
       .catch((err) => {
-        onShowToast(`Impossibile ricalcolare la proiezione: ${err.message}`, true);
+        setProjectedPoints([]);
+        setVectorDimensions(null);
+        onShowToast(`Impossibile calcolare ${alg}: ${err instanceof Error ? err.message : 'errore sconosciuto'}`, true);
       });
+  };
+
+  // Calcola automaticamente la prima proiezione quando si apre la vista.
+  useEffect(() => {
+    if (projectedPoints.length === 0 && chunks.length > 0) {
+      handleSelectAlgorithm(projection);
+    }
+  }, [chunks.length]);
+
+  const getClusterColor = (clusterName: string) => {
+    const palette = ['#4cd7f6', '#6366f1', '#d0bcff', '#10b981', '#f59e0b', '#f472b6'];
+    const match = clusterName.match(/Cluster\s+(\d+)/i);
+    const index = match ? Number(match[1]) : 0;
+    return palette[index % palette.length];
   };
 
   // Cluster membership is computed by KMeans and has no semantic name by itself.
@@ -61,15 +80,30 @@ export const VectorExplorerView: React.FC<VectorExplorerViewProps> = ({
   ];
 
   // Show only coordinates returned by the backend. Never synthesize fallback points.
-  const scatterPoints = projectedPoints.map((p, idx) => ({
-    ...(chunks[idx % Math.max(chunks.length, 1)] ?? {}),
-    id: p.id,
-    docTitle: p.title,
-    section: p.section,
-    cluster: p.cluster,
-    x: p.x,
-    y: p.y,
-  })) as ChunkItem[];
+  const scatterPoints = projectedPoints.map((p) => {
+    const sourceChunk = chunks.find((chunk) => chunk.id === p.id);
+    return {
+      ...(sourceChunk ?? {
+        id: p.id,
+        docTitle: p.title,
+        section: p.section,
+        text: '',
+        chunkNum: 0,
+        docType: 'Libro',
+        denseScore: 0,
+        bm25Score: 0,
+        rerankScore: 0,
+        tokenCount: 0,
+        embeddingModel: '',
+      }),
+      id: p.id,
+      docTitle: p.title,
+      section: p.section,
+      cluster: p.cluster,
+      x: p.x,
+      y: p.y,
+    };
+  }) as ChunkItem[];
 
   const visibleScatterPoints = scatterPoints.filter((point) => {
     const term = globalSearch.trim().toLowerCase();
@@ -78,13 +112,6 @@ export const VectorExplorerView: React.FC<VectorExplorerViewProps> = ({
       String(value ?? '').toLowerCase().includes(term)
     );
   });
-
-  const getClusterColor = (clusterName: string) => {
-    const palette = ['#4cd7f6', '#6366f1', '#d0bcff', '#10b981', '#f59e0b', '#f472b6'];
-    const match = clusterName.match(/Cluster\s+(\d+)/i);
-    const index = match ? Number(match[1]) : 0;
-    return palette[index % palette.length];
-  };
 
   return (
     <div className="p-6 flex flex-col gap-6 max-w-[1600px] mx-auto w-full relative z-10">

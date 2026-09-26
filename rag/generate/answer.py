@@ -70,9 +70,19 @@ class OllamaGenerator:
 
     def genera(self, messaggi: list[dict]) -> str:
         payload = {"model": self.modello, "messages": messaggi, "stream": False}
-        risposta = requests.post(self.url, json=payload, timeout=self.timeout)
-        risposta.raise_for_status()
-        corpo = risposta.json()
+        try:
+            risposta = requests.post(self.url, json=payload, timeout=self.timeout)
+            risposta.raise_for_status()
+        except requests.RequestException as exc:
+            base = self.url.rsplit("/api/chat", 1)[0]
+            raise RuntimeError(
+                f"Ollama generazione non raggiungibile o modello '{self.modello}' non disponibile "
+                f"({base}). Dettaglio: {exc}"
+            ) from exc
+        try:
+            corpo = risposta.json()
+        except ValueError as exc:
+            raise RuntimeError(f"Ollama generazione ha restituito una risposta non JSON: {risposta.text[:300]}") from exc
 
         messaggio = corpo.get("message", {}).get("content")
         if not messaggio:
