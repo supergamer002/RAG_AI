@@ -294,11 +294,12 @@ def get_health():
     except Exception as e:
         ollama_detail = f"Errore connessione: {str(e)}"
 
-    lancedb_ok = RAG_IMPORT_ERROR is None
-    lancedb_detail = "OK" if lancedb_ok else f"Dipendenze RAG non caricabili: {RAG_IMPORT_ERROR}"
+    database_import_error = RAG_IMPORT_ERRORS.get("database")
+    lancedb_ok = database_import_error is None
+    lancedb_detail = "OK" if lancedb_ok else f"Dipendenza database non caricabile: {database_import_error}"
     try:
-        if RAG_IMPORT_ERROR is not None:
-            raise RuntimeError(RAG_IMPORT_ERROR)
+        if database_import_error is not None:
+            raise RuntimeError(database_import_error)
         tabella = db_manager.get_active_table()
         tabella.count_rows()
         schema_vector = tabella.schema.field("vector")
@@ -315,6 +316,7 @@ def get_health():
         "ollama": ollama_ok,
         "ollama_detail": ollama_detail,
         "startup_error": startup_error,
+        "component_errors": dict(RAG_IMPORT_ERRORS),
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
 
