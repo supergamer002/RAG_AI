@@ -188,7 +188,7 @@ def mappa_chunk_item(c: Dict[str, Any], idx: int, initial_rank_map: Dict[str, in
         "tokenCount": stima_token(testo),
         "overlapPct": c.get("overlapPct"),
         "embeddingModel": c.get("embeddingModel") or config.get("embeddingModel", "qwen3-embedding:0.6b"),
-        "dimensions": (f"{len(c.get("vector", []))}d" if c.get("vector") is not None and len(c.get("vector", [])) else None),
+        "dimensions": (f"{len(c.get('vector', []))}d" if c.get("vector") is not None and len(c.get("vector", [])) else None),
         "charOffset": c.get("posizione", ""),
         "timestamp": c.get("ingestedAt", ""),
         "vectorTable": config.get("tableName", "chunks"),
