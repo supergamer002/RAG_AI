@@ -121,3 +121,32 @@ html.theme-light textarea {
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(76, 215, 246, 0.4);
 }
+
+
+/* Bridge legacy arbitrary Tailwind palette utilities to the semantic light theme.
+   Components can migrate to tokens incrementally without retaining dark-only surfaces. */
+html.theme-light [class*="bg-[#0f131d]"] { background-color: var(--bg-surface) !important; }
+html.theme-light [class*="bg-[#171b26]"] { background-color: var(--bg-surface-low) !important; }
+html.theme-light [class*="bg-[#0a0e18]"] { background-color: var(--bg-surface-lowest) !important; }
+html.theme-light [class*="bg-[#1c1f2a]"] { background-color: var(--bg-surface-container) !important; }
+html.theme-light [class*="bg-[#262a35]"] { background-color: var(--bg-surface-high) !important; }
+html.theme-light [class*="bg-[#313540]"] { background-color: var(--bg-surface-highest) !important; }
+
+html.theme-light [class*="text-[#dfe2f1]"] { color: var(--text-on-surface) !important; }
+html.theme-light [class*="text-[#bcc9cd]"] { color: var(--text-on-surface-variant) !important; }
+html.theme-light [class*="text-[#869397]"] { color: #475569 !important; }
+html.theme-light [class*="text-[#4cd7f6]"] { color: var(--color-primary) !important; }
+html.theme-light [class*="text-[#d0bcff]"] { color: var(--color-tertiary) !important; }
+html.theme-light [class*="text-[#c0c1ff]"] { color: var(--color-secondary) !important; }
+html.theme-light [class*="text-[#ffb4ab]"] { color: var(--color-error) !important; }
+
+html.theme-light [class*="border-[#262a35]"] { border-color: var(--border-outline) !important; }
+html.theme-light [class*="border-[#3d494c]"] { border-color: var(--border-outline) !important; }
+
+html.theme-light [class*="bg-[#4cd7f6]"] { background-color: var(--color-primary) !important; }
+html.theme-light [class*="hover:bg-[#06b6d4]"]:hover { background-color: var(--color-primary-container) !important; }
+html.theme-light [class*="hover:bg-[#353944]"]:hover { background-color: var(--bg-surface-highest) !important; }
+html.theme-light [class*="hover:bg-[#262a35]"]:hover { background-color: var(--bg-surface-high) !important; }
+
+html.theme-light [class*="placeholder:text-[#869397]"]::placeholder { color: #64748b !important; }
+html.theme-light [class*="ring-[#4cd7f6]"]:focus { --tw-ring-color: var(--color-primary) !important; }
