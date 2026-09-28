@@ -26,11 +26,12 @@ export const Header: React.FC<HeaderProps> = ({
   const [healthError, setHealthError] = useState<string | null>(null);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [notifications, setNotifications] = useState<Array<{ id: string; title: string; message: string; time: string; unread: boolean }>>([]);
-  const [health, setHealth] = useState<{ fastapi: boolean; lancedb: boolean; ollama: boolean; ollamaEmbedding: boolean | null }>({
+  const [health, setHealth] = useState<{ fastapi: boolean; lancedb: boolean; ollama: boolean; ollamaEmbedding: boolean | null; crossEncoder: { status: string; label: string; model?: string; error?: string | null } }>({
     fastapi: true,
     lancedb: true,
     ollama: false,
     ollamaEmbedding: null,
+    crossEncoder: { status: 'standby', label: 'Lazy Standby' },
   });
 
   useEffect(() => {
@@ -47,6 +48,10 @@ export const Header: React.FC<HeaderProps> = ({
                 typeof data.ollamaEmbedding === 'boolean'
                   ? data.ollamaEmbedding
                   : null,
+              crossEncoder: data.crossEncoder ?? {
+                status: 'unavailable',
+                label: 'Unavailable',
+              },
             };
             setHealthError(null);
             setHealth((previous) => {
@@ -89,7 +94,7 @@ export const Header: React.FC<HeaderProps> = ({
                 unread: true,
               }, ...current].slice(0, 20));
             }
-            return { fastapi: false, lancedb: false, ollama: false, ollamaEmbedding: null };
+            return { fastapi: false, lancedb: false, ollama: false, ollamaEmbedding: null, crossEncoder: { status: 'unavailable', label: 'Unavailable' } };
           });
         });
     };
@@ -159,10 +164,35 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
 
           {/* CrossEncoder */}
-          <div className="hidden lg:flex items-center gap-1.5 bg-[#171b26] px-2.5 py-1.5 rounded-lg border border-[#262a35] shrink-0">
-            <span className="w-1.5 h-1.5 rounded-full bg-[#869397]" />
+          <div
+            className="hidden lg:flex items-center gap-1.5 bg-[#171b26] px-2.5 py-1.5 rounded-lg border border-[#262a35] shrink-0"
+            title={
+              health.crossEncoder.error
+                ? `CrossEncoder: ${health.crossEncoder.error}`
+                : `Modello: ${health.crossEncoder.model || 'non specificato'}`
+            }
+          >
+            <span
+              className={`w-1.5 h-1.5 rounded-full ${
+                health.crossEncoder.status === 'ready'
+                  ? 'bg-[#4cd7f6]'
+                  : health.crossEncoder.status === 'error'
+                    ? 'bg-[#ffb4ab]'
+                    : 'bg-[#869397]'
+              }`}
+            />
             <span className="font-mono text-[11px] text-[#bcc9cd]">CrossEncoder:</span>
-            <span className="font-mono text-[11px] text-[#869397]">Lazy Standby</span>
+            <span
+              className={`font-mono text-[11px] font-medium ${
+                health.crossEncoder.status === 'ready'
+                  ? 'text-[#4cd7f6]'
+                  : health.crossEncoder.status === 'error'
+                    ? 'text-[#ffb4ab]'
+                    : 'text-[#869397]'
+              }`}
+            >
+              {health.crossEncoder.label}
+            </span>
           </div>
         </div>
 
