@@ -1,4 +1,4 @@
-import { apiFetch, apiJson, apiUrl, getApiToken, setApiToken } from '../api';
+import { apiFetch, formatApiError } from '../api';
 import React, { useState } from 'react';
 import { KnowledgeDocument } from '../types';
 
@@ -31,6 +31,7 @@ export const KnowledgeNodesView: React.FC<KnowledgeNodesViewProps> = ({
 }) => {
   const [filterType, setFilterType] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState('');
+  const [ingestionJobs, setIngestionJobs] = useState<Array<{ jobId: string; status: string; stage?: string; progressPercent?: number; filesProcessed?: number; filesTotal?: number; chunksCreated?: number; error?: string | null }>>([]);
 
   const filteredDocs = documents.filter((doc) => {
     const matchesType = filterType === 'all' || doc.type.toLowerCase() === filterType.toLowerCase();
@@ -48,7 +49,23 @@ export const KnowledgeNodesView: React.FC<KnowledgeNodesViewProps> = ({
     return matchesType && matchesSearch && matchesGlobal;
   });
 
-  const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+  React.useEffect(() => {
+    let active = true;
+    const loadJobs = () => {
+      apiFetch('/api/ingest/jobs?limit=20')
+        .then((res) => res.ok ? res.json() : null)
+        .then((data) => {
+          if (active && Array.isArray(data)) setIngestionJobs(data);
+        })
+        .catch(() => {});
+    };
+    loadJobs();
+    const interval = window.setInterval(loadJobs, 5000);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, []);
 
   const handleReindex = (docId: string, docName: string) => {
     apiFetch(`/api/documents/${docId}/reindex`, {
@@ -62,7 +79,7 @@ export const KnowledgeNodesView: React.FC<KnowledgeNodesViewProps> = ({
         onShowToast(`Re-indicizzazione avviata in background per "${docName}" (Job ID: ${data.jobId.slice(0, 8)}).`);
       })
       .catch((err) => {
-        onShowToast(`Impossibile re-indicizzare "${docName}": ${err.message}`, true);
+        onShowToast(formatApiError(err, `Re-indicizzazione "${docName}"`), true);
       });
   };
 
@@ -175,6 +192,44 @@ export const KnowledgeNodesView: React.FC<KnowledgeNodesViewProps> = ({
             placeholder="Cerca nome documento..."
             className="w-full bg-[#0a0e18] text-[#dfe2f1] text-[12px] pl-9 pr-3 py-2 rounded-lg border border-[#262a35] focus:outline-none focus:ring-1 focus:ring-[#4cd7f6]"
           />
+        </div>
+      </div>
+
+      {/* Ingestion Jobs */}
+      <div className="bg-[#171b26] rounded-xl border border-[#262a35] overflow-hidden shadow-md">
+        <div className="px-4 py-3 border-b border-[#262a35] flex items-center justify-between">
+          <div>
+            <div className="text-[12px] font-semibold text-[#dfe2f1]">Ingestion Jobs</div>
+            <div className="text-[10px] font-mono text-[#869397]">Stato persistito dal backend</div>
+          </div>
+          <span className="text-[10px] font-mono text-[#4cd7f6]">
+            {ingestionJobs.filter((job) => ['pending', 'in_progress'].includes(job.status)).length} attivi
+          </span>
+        </div>
+        <div className="divide-y divide-[#262a35]">
+          {ingestionJobs.length === 0 ? (
+            <div className="px-4 py-4 text-[11px] text-[#869397]">Nessun job registrato.</div>
+          ) : ingestionJobs.slice(0, 8).map((job) => (
+            <div key={job.jobId} className="px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div className="min-w-0">
+                <div className="text-[11px] font-mono text-[#dfe2f1] truncate">{job.jobId.slice(0, 12)}…</div>
+                <div className="text-[10px] text-[#bcc9cd]">
+                  {job.stage || job.status} · {job.filesProcessed || 0}/{job.filesTotal || 0} file · {job.chunksCreated || 0} chunk
+                </div>
+              </div>
+              <div className="flex items-center gap-3 shrink-0">
+                <div className="w-28 h-1.5 rounded-full bg-[#0a0e18] overflow-hidden">
+                  <div
+                    className="h-full bg-[#4cd7f6] rounded-full transition-[width] duration-500"
+                    style={{ width: `${Math.max(0, Math.min(100, Number(job.progressPercent || 0)))}%` }}
+                  />
+                </div>
+                <span className="text-[10px] font-mono text-[#bcc9cd] min-w-10 text-right">
+                  {Number(job.progressPercent || 0).toFixed(0)}%
+                </span>
+              </div>
+            </div>
+          ))}
         </div>
       </div>
 
