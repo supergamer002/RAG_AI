@@ -9,3 +9,4 @@ dist/
 *.json
 *.pdf
 *.zip
+log_debug.log
