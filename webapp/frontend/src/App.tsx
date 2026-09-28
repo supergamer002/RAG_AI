@@ -8,7 +8,6 @@ import { useState, useEffect } from 'react';
 import { NavPage, ThemeMode, AppSettings, ChunkItem, KnowledgeDocument, TelemetryLog, EvalMetric } from './types';
 import { initialSettings } from './data/defaultSettings';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 import { Sidebar } from './components/Sidebar';
 import { Header } from './components/Header';
 import { SettingsView } from './components/SettingsView';
