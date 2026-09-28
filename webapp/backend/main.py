@@ -25,12 +25,15 @@ from fastapi.responses import FileResponse, StreamingResponse
 from starlette.background import BackgroundTask
 from pydantic import BaseModel
 
+from webapp.backend.debug_logging import configure_debug_logging, debug_enabled, debug_exception, debug_message
+
 from rag.common.monitoring import tracciatore_globale
 from rag.common.schema import Chunk, TipoFonte, stima_token
 
 # Keep the module importable in diagnostic mode even when a native RAG dependency
 # (PyArrow/LanceDB) cannot load. This lets /api/health report the real startup
 # failure instead of reducing it to a browser-level "Failed to fetch".
+DEBUG_MODE = configure_debug_logging()
 RAG_IMPORT_ERROR: Optional[str] = None
 RAG_IMPORT_ERRORS: Dict[str, str] = {}
 
@@ -39,18 +42,33 @@ try:
 except Exception as exc:
     db_manager = None
     RAG_IMPORT_ERRORS["database"] = f"{type(exc).__name__}: {exc}"
+    debug_exception(
+        "Import RAG component fallito",
+        exc,
+        extra={"component": "database", "phase": "module-import"},
+    )
 
 try:
     from rag.index.embed import OllamaEmbedder
 except Exception as exc:
     OllamaEmbedder = None
     RAG_IMPORT_ERRORS["embedding"] = f"{type(exc).__name__}: {exc}"
+    debug_exception(
+        "Import RAG component fallito",
+        exc,
+        extra={"component": "embedding", "phase": "module-import"},
+    )
 
 try:
     from rag.index.embed_manager import embedder_manager
 except Exception as exc:
     embedder_manager = None
     RAG_IMPORT_ERRORS["embedding_manager"] = f"{type(exc).__name__}: {exc}"
+    debug_exception(
+        "Import RAG component fallito",
+        exc,
+        extra={"component": "embedding_manager", "phase": "module-import"},
+    )
 
 try:
     from rag.index.store import upsert_chunks, conta_chunk
@@ -58,6 +76,11 @@ except Exception as exc:
     upsert_chunks = None
     conta_chunk = None
     RAG_IMPORT_ERRORS["store"] = f"{type(exc).__name__}: {exc}"
+    debug_exception(
+        "Import RAG component fallito",
+        exc,
+        extra={"component": "store", "phase": "module-import"},
+    )
 
 try:
     from rag.retrieve.hybrid_search import ricerca_ibrida, crea_indice_fulltext
@@ -65,12 +88,22 @@ except Exception as exc:
     ricerca_ibrida = None
     crea_indice_fulltext = None
     RAG_IMPORT_ERRORS["retrieval"] = f"{type(exc).__name__}: {exc}"
+    debug_exception(
+        "Import RAG component fallito",
+        exc,
+        extra={"component": "retrieval", "phase": "module-import"},
+    )
 
 try:
     from rag.retrieve.rerank import CrossEncoderReranker
 except Exception as exc:
     CrossEncoderReranker = None
     RAG_IMPORT_ERRORS["reranker"] = f"{type(exc).__name__}: {exc}"
+    debug_exception(
+        "Import RAG component fallito",
+        exc,
+        extra={"component": "reranker", "phase": "module-import"},
+    )
 
 try:
     from rag.generate.answer import rispondi, OllamaGenerator
@@ -78,6 +111,11 @@ except Exception as exc:
     rispondi = None
     OllamaGenerator = None
     RAG_IMPORT_ERRORS["generation"] = f"{type(exc).__name__}: {exc}"
+    debug_exception(
+        "Import RAG component fallito",
+        exc,
+        extra={"component": "generation", "phase": "module-import"},
+    )
 
 try:
     from rag.ingest.from_units import ingest_file_unita, ingest_cartella_unita
@@ -85,12 +123,22 @@ except Exception as exc:
     ingest_file_unita = None
     ingest_cartella_unita = None
     RAG_IMPORT_ERRORS["ingest_units"] = f"{type(exc).__name__}: {exc}"
+    debug_exception(
+        "Import RAG component fallito",
+        exc,
+        extra={"component": "ingest_units", "phase": "module-import"},
+    )
 
 try:
     from rag.ingest.docling_extract import ingest_pdf
 except Exception as exc:
     ingest_pdf = None
     RAG_IMPORT_ERRORS["ingest_pdf"] = f"{type(exc).__name__}: {exc}"
+    debug_exception(
+        "Import RAG component fallito",
+        exc,
+        extra={"component": "ingest_pdf", "phase": "module-import"},
+    )
 
 if RAG_IMPORT_ERRORS:
     RAG_IMPORT_ERROR = " | ".join(
@@ -155,6 +203,36 @@ _stream_tickets: dict[str, float] = {}
 _STREAM_TICKET_TTL = 60
 _RATE_EXEMPT = {"/", "/api/health", "/api/auth/status"}
 _AUTH_EXEMPT = {"/", "/api/health", "/api/auth/status", "/api/settings/defaults"}
+
+@app.middleware("http")
+async def debug_exception_capture(request: Request, call_next):
+    """Cattura ogni eccezione non gestita prodotta da una richiesta HTTP."""
+    try:
+        response = await call_next(request)
+    except Exception as exc:
+        debug_exception(
+            "Eccezione HTTP non gestita",
+            exc,
+            request=request,
+            extra={
+                "status": 500,
+                "handler": "global-debug-middleware",
+                "ragImportErrors": RAG_IMPORT_ERRORS,
+            },
+        )
+        raise
+    if debug_enabled() and response.status_code >= 500:
+        debug_message(
+            "Risposta HTTP 5xx senza eccezione propagata al middleware",
+            extra={
+                "status": response.status_code,
+                "method": request.method,
+                "path": request.url.path,
+                "ragImportErrors": RAG_IMPORT_ERRORS,
+            },
+        )
+    return response
+
 
 @app.middleware("http")
 async def api_security(request: Request, call_next):
@@ -453,7 +531,18 @@ def execute_query(req: QueryRequest):
     except HTTPException:
         raise
     except Exception as e:
-        logging.exception("Query RAG fallita")
+        debug_exception(
+            "Query RAG fallita",
+            e,
+            extra={
+                "route": "/api/query",
+                "queryLength": len(query),
+                "searchMode": req.searchMode,
+                "topK": req.topK,
+                "topN": req.topN,
+                "databaseId": getattr(db_manager, "active_id", None),
+            },
+        )
         raise HTTPException(
             status_code=503,
             detail=f"Pipeline RAG non disponibile: {type(e).__name__}: {e}",
@@ -713,6 +802,17 @@ def _esegui_ingestion_job_sync(
         ingestion_jobs[job_id]["currentFile"] = None
         ingestion_jobs[job_id]["updatedAt"] = time.time()
     except Exception as e:
+        debug_exception(
+            "Job di ingestion singolo fallito",
+            e,
+            extra={
+                "jobId": job_id,
+                "file": str(filepath),
+                "isDirectory": is_directory,
+                "databaseId": getattr(db_manager, "active_id", None) if database_id is None else database_id,
+                "phase": "ingestion-single",
+            },
+        )
         ingestion_jobs[job_id]["status"] = "failed"
         ingestion_jobs[job_id]["error"] = str(e)
         ingestion_jobs[job_id]["filesFailed"] = 1
@@ -789,6 +889,16 @@ def esegui_ingestion_batch_job(
         source_root = db_root / "sources"
         tabella = db_manager.get_table_for_db(target_db_id)
     except Exception as exc:
+        debug_exception(
+            "Impossibile aprire il database target per il batch di ingestion",
+            exc,
+            extra={
+                "jobId": job_id,
+                "databaseId": target_db_id,
+                "batchRoot": str(batch_root),
+                "phase": "ingestion-database-open",
+            },
+        )
         job["status"] = "failed"
         job["error"] = f"Impossibile aprire il database target: {exc}"
         shutil.rmtree(batch_root, ignore_errors=True)
@@ -830,6 +940,16 @@ def esegui_ingestion_batch_job(
             job["currentFile"] = None
             job["updatedAt"] = time.time()
         except Exception as exc:
+            debug_exception(
+                "Errore durante l'elaborazione di un file di ingestion batch",
+                exc,
+                extra={
+                    "jobId": job_id,
+                    "file": str(filepath),
+                    "databaseId": target_db_id,
+                    "phase": "ingestion-file",
+                },
+            )
             job["filesFailed"] += 1
             errors.append({"file": str(filepath.relative_to(batch_root)), "error": str(exc)})
             job["errors"] = errors
@@ -837,6 +957,15 @@ def esegui_ingestion_batch_job(
         try:
             crea_indice_fulltext(tabella)
         except Exception as exc:
+            debug_exception(
+                "Ricostruzione indice full-text fallita durante ingestion",
+                exc,
+                extra={
+                    "jobId": job_id,
+                    "databaseId": target_db_id,
+                    "phase": "ingestion-fts",
+                },
+            )
             errors.append({"file": "<fts>", "error": str(exc)})
             job["errors"] = errors
 
