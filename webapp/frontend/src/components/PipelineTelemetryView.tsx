@@ -57,7 +57,7 @@ export const PipelineTelemetryView: React.FC<PipelineTelemetryViewProps> = ({
         let streamUrl = `${API_BASE_URL}/api/telemetry/stream`;
 
         if (token) {
-          const response = await apiJson<{ ticket: string }>(`${API_BASE_URL}/api/telemetry/stream-ticket`, {
+          const response = await apiJson<{ ticket: string }>(`/api/telemetry/stream-ticket`, {
             method: 'POST',
             headers: {
               Authorization: `Bearer ${token}`,
