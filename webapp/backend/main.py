@@ -18,7 +18,7 @@ from collections import defaultdict, deque
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Query, Request
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Query, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from starlette.background import BackgroundTask
@@ -31,19 +31,72 @@ from rag.common.schema import Chunk, TipoFonte, stima_token
 # (PyArrow/LanceDB) cannot load. This lets /api/health report the real startup
 # failure instead of reducing it to a browser-level "Failed to fetch".
 RAG_IMPORT_ERROR: Optional[str] = None
+RAG_IMPORT_ERRORS: Dict[str, str] = {}
+
 try:
     from rag.index.db_manager import db_manager
+except Exception as exc:
+    db_manager = None
+    RAG_IMPORT_ERRORS["database"] = f"{type(exc).__name__}: {exc}"
+
+try:
     from rag.index.embed import OllamaEmbedder
+except Exception as exc:
+    OllamaEmbedder = None
+    RAG_IMPORT_ERRORS["embedding"] = f"{type(exc).__name__}: {exc}"
+
+try:
     from rag.index.embed_manager import embedder_manager
+except Exception as exc:
+    embedder_manager = None
+    RAG_IMPORT_ERRORS["embedding_manager"] = f"{type(exc).__name__}: {exc}"
+
+try:
     from rag.index.store import upsert_chunks, conta_chunk
+except Exception as exc:
+    upsert_chunks = None
+    conta_chunk = None
+    RAG_IMPORT_ERRORS["store"] = f"{type(exc).__name__}: {exc}"
+
+try:
     from rag.retrieve.hybrid_search import ricerca_ibrida, crea_indice_fulltext
+except Exception as exc:
+    ricerca_ibrida = None
+    crea_indice_fulltext = None
+    RAG_IMPORT_ERRORS["retrieval"] = f"{type(exc).__name__}: {exc}"
+
+try:
     from rag.retrieve.rerank import CrossEncoderReranker
+except Exception as exc:
+    CrossEncoderReranker = None
+    RAG_IMPORT_ERRORS["reranker"] = f"{type(exc).__name__}: {exc}"
+
+try:
     from rag.generate.answer import rispondi, OllamaGenerator
+except Exception as exc:
+    rispondi = None
+    OllamaGenerator = None
+    RAG_IMPORT_ERRORS["generation"] = f"{type(exc).__name__}: {exc}"
+
+try:
     from rag.ingest.from_units import ingest_file_unita, ingest_cartella_unita
+except Exception as exc:
+    ingest_file_unita = None
+    ingest_cartella_unita = None
+    RAG_IMPORT_ERRORS["ingest_units"] = f"{type(exc).__name__}: {exc}"
+
+try:
     from rag.ingest.docling_extract import ingest_pdf
 except Exception as exc:
-    RAG_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
+    ingest_pdf = None
+    RAG_IMPORT_ERRORS["ingest_pdf"] = f"{type(exc).__name__}: {exc}"
 
+if RAG_IMPORT_ERRORS:
+    RAG_IMPORT_ERROR = " | ".join(
+        f"{name}: {error}" for name, error in RAG_IMPORT_ERRORS.items()
+    )
+
+if db_manager is None:
     class _UnavailableDatabaseManager:
         """Central degraded-mode guard for every database-dependent endpoint."""
 
@@ -53,24 +106,14 @@ except Exception as exc:
                 detail={
                     "error": "rag_dependency_unavailable",
                     "message": "Il layer RAG/LanceDB non è disponibile in questo processo.",
-                    "startupError": RAG_IMPORT_ERROR,
-                    "hint": "Controllare /api/health e correggere la dipendenza/import indicata, quindi riavviare il backend.",
+                    "startupError": RAG_IMPORT_ERRORS.get("database") or RAG_IMPORT_ERROR,
+                    "components": RAG_IMPORT_ERRORS,
+                    "hint": "Controllare /api/health, correggere la dipendenza/import indicata e riavviare il backend.",
                 },
             )
 
     db_manager = _UnavailableDatabaseManager()
-    OllamaEmbedder = None
-    embedder_manager = None
-    upsert_chunks = None
-    conta_chunk = None
-    ricerca_ibrida = None
-    crea_indice_fulltext = None
-    CrossEncoderReranker = None
-    rispondi = None
-    OllamaGenerator = None
-    ingest_file_unita = None
-    ingest_cartella_unita = None
-    ingest_pdf = None
+
 
 CONFIG_PATH = Path("webapp/backend/config.json")
 
