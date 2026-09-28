@@ -483,6 +483,8 @@ Its backend command is:
 
 `wsl --cd "%PROJECT_DIR%" -- env RAG_DEBUG=1 python -m uvicorn webapp.backend.main:app --host 0.0.0.0 --port 8000 --reload --log-level debug`
 
+The Windows start/cmd invocation was also hardened to avoid nested-command quoting problems when the project path contains spaces.
+
 Ollama and the frontend continue to run inside WSL.
 
 This avoids depending on a nonexistent Uvicorn `--debug` flag and ensures the debug flag reaches the same Linux/WSL Python process that loads LanceDB/PyArrow.
