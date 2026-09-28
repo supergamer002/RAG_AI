@@ -13,6 +13,7 @@ import uuid
 import time
 import os
 import secrets
+import threading
 import tempfile
 import shutil
 from collections import defaultdict, deque
@@ -289,6 +290,62 @@ MAX_INGEST_FILES = 500
 MAX_INGEST_FILE_BYTES = 250 * 1024 * 1024
 MAX_INGEST_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
 SUPPORTED_INGEST_EXTENSIONS = {".pdf", ".json"}
+INGESTION_JOBS_PATH = Path("webapp/backend/ingestion_jobs.json")
+INGESTION_JOB_RETENTION = 200
+_ingestion_jobs_lock = threading.RLock()
+_ingestion_semaphore: Optional[asyncio.Semaphore] = None
+
+def _persist_ingestion_jobs() -> None:
+    try:
+        with _ingestion_jobs_lock:
+            payload = {
+                job_id: {
+                    key: value
+                    for key, value in job.items()
+                    if key not in {"ageSeconds", "lastUpdateAgeSeconds"}
+                }
+                for job_id, job in list(ingestion_jobs.items())[-INGESTION_JOB_RETENTION:]
+            }
+            INGESTION_JOBS_PATH.parent.mkdir(parents=True, exist_ok=True)
+            temp_path = INGESTION_JOBS_PATH.with_suffix(".tmp")
+            temp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            temp_path.replace(INGESTION_JOBS_PATH)
+    except OSError as exc:
+        debug_exception("Persistenza job ingestion fallita", exc, extra={"phase": "job-persistence"})
+
+def _load_ingestion_jobs() -> None:
+    global ingestion_jobs
+    try:
+        if not INGESTION_JOBS_PATH.exists():
+            return
+        raw = json.loads(INGESTION_JOBS_PATH.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            return
+        with _ingestion_jobs_lock:
+            ingestion_jobs = {
+                str(job_id): dict(job)
+                for job_id, job in raw.items()
+                if isinstance(job, dict)
+            }
+            for job in ingestion_jobs.values():
+                if job.get("status") in {"pending", "in_progress", "running"}:
+                    job["status"] = "interrupted"
+                    job["stage"] = "interrupted"
+                    job["error"] = "Il processo backend è stato riavviato prima del completamento del job."
+                    job["updatedAt"] = time.time()
+            if any(job.get("status") == "interrupted" for job in ingestion_jobs.values()):
+                _persist_ingestion_jobs()
+    except (OSError, ValueError, TypeError) as exc:
+        debug_exception("Caricamento job ingestion persistiti fallito", exc, extra={"phase": "job-load"})
+
+async def _run_ingestion_with_limit(coro) -> None:
+    global _ingestion_semaphore
+    if _ingestion_semaphore is None:
+        limit = max(1, int(config.get("workerConcurrency", 2) or 2))
+        _ingestion_semaphore = asyncio.Semaphore(limit)
+    async with _ingestion_semaphore:
+        await coro
+
 
 
 class QueryRequest(BaseModel):
@@ -811,21 +868,28 @@ def _esegui_ingestion_job_sync(
     database_id: Optional[str] = None,
 ):
     ingestion_jobs[job_id]["status"] = "in_progress"
+    ingestion_jobs[job_id]["stage"] = "reading"
+    ingestion_jobs[job_id]["progressPercent"] = 0.0
+    ingestion_jobs[job_id]["updatedAt"] = time.time()
+    _persist_ingestion_jobs()
 
     try:
         if is_directory:
+            ingestion_jobs[job_id]["stage"] = "parsing"
             chunks = ingest_cartella_unita(
                 filepath,
                 target_token=chunk_tokens,
                 overlap_ratio=overlap_pct / 100.0,
             )
         elif filepath.suffix.lower() == ".json":
+            ingestion_jobs[job_id]["stage"] = "parsing"
             chunks = ingest_file_unita(
                 filepath,
                 target_token=chunk_tokens,
                 overlap_ratio=overlap_pct / 100.0,
             )
         else:
+            ingestion_jobs[job_id]["stage"] = "parsing"
             chunks = ingest_pdf(
                 filepath,
                 TipoFonte.LIBRO,
@@ -851,14 +915,22 @@ def _esegui_ingestion_job_sync(
                     pass
             target_db_id = database_id or db_manager.active_id
             tabella = db_manager.get_table_for_db(target_db_id)
-            _indicizza_chunks_incrementale(tabella, chunks, ingestion_jobs[job_id])
+            ingestion_jobs[job_id]["stage"] = "embedding"
+            ingestion_jobs[job_id]["chunksTotal"] = len(chunks)
+            ingestion_jobs[job_id]["progressPercent"] = 20.0 if chunks else 100.0
+            _indicizza_chunks_incrementale(tabella, chunks, ingestion_jobs[job_id], database_id=target_db_id)
+            ingestion_jobs[job_id]["stage"] = "finalizing"
             crea_indice_fulltext(tabella)
 
         ingestion_jobs[job_id]["status"] = "completed"
+        ingestion_jobs[job_id]["stage"] = "ready"
+        ingestion_jobs[job_id]["progressPercent"] = 100.0
+        ingestion_jobs[job_id]["chunksTotal"] = len(chunks)
         ingestion_jobs[job_id]["chunksCreated"] = len(chunks)
         ingestion_jobs[job_id]["filesProcessed"] = 1
         ingestion_jobs[job_id]["currentFile"] = None
         ingestion_jobs[job_id]["updatedAt"] = time.time()
+        _persist_ingestion_jobs()
     except Exception as e:
         debug_exception(
             "Job di ingestion singolo fallito",
@@ -872,6 +944,7 @@ def _esegui_ingestion_job_sync(
             },
         )
         ingestion_jobs[job_id]["status"] = "failed"
+        ingestion_jobs[job_id]["stage"] = "failed"
         ingestion_jobs[job_id]["error"] = str(e)
         ingestion_jobs[job_id]["filesFailed"] = 1
         ingestion_jobs[job_id]["currentFile"] = None
@@ -918,6 +991,9 @@ def _indicizza_chunks_incrementale(
             ) from exc
         totale += inseriti
         job["chunksCreated"] = job.get("chunksCreated", 0) + inseriti
+        total_target = max(1, int(job.get("chunksTotal", len(chunks))))
+        job["progressPercent"] = min(95.0, 20.0 + (job["chunksCreated"] / total_target) * 75.0)
+        job["stage"] = "embedding"
         job["updatedAt"] = time.time()
     return totale
 
@@ -938,6 +1014,8 @@ def esegui_ingestion_batch_job(
     """
     job = ingestion_jobs[job_id]
     job["status"] = "in_progress"
+    job["stage"] = "reading"
+    job["progressPercent"] = 0.0
     job["startedAt"] = job.get("startedAt") or time.time()
     job["updatedAt"] = time.time()
     target_db_id = database_id or db_manager.active_id
@@ -970,6 +1048,7 @@ def esegui_ingestion_batch_job(
         job["updatedAt"] = time.time()
         try:
             suffix = filepath.suffix.lower()
+            job["stage"] = "parsing"
             if suffix == ".json":
                 chunks = ingest_file_unita(filepath, target_token=chunk_tokens, overlap_ratio=overlap_pct / 100.0)
             elif suffix == ".pdf":
@@ -989,12 +1068,16 @@ def esegui_ingestion_batch_job(
                 chunk.fonte_path = str(Path("sources") / relative_source).replace("\\", "/")
                 chunk.ricalcola_id()
 
+            job["chunksTotal"] = job.get("chunksTotal", 0) + len(chunks)
+            job["stage"] = "embedding" if chunks else "finalizing"
             if chunks:
                 indicizzati = _indicizza_chunks_incrementale(tabella, chunks, job, database_id=target_db_id)
                 total_chunks += indicizzati
 
             job["filesProcessed"] += 1
             job["chunksCreated"] = total_chunks
+            job["progressPercent"] = round((job["filesProcessed"] / max(1, job["filesTotal"])) * 100.0, 1)
+            job["stage"] = "finalizing"
             job["currentFile"] = None
             job["updatedAt"] = time.time()
         except Exception as exc:
@@ -1012,35 +1095,37 @@ def esegui_ingestion_batch_job(
             errors.append({"file": str(filepath.relative_to(batch_root)), "error": str(exc)})
             job["errors"] = errors
 
+
+    if total_chunks > 0:
+        job["stage"] = "finalizing"
         try:
             crea_indice_fulltext(tabella)
         except Exception as exc:
-            debug_exception(
-                "Ricostruzione indice full-text fallita durante ingestion",
-                exc,
-                extra={
-                    "jobId": job_id,
-                    "databaseId": target_db_id,
-                    "phase": "ingestion-fts",
-                },
-            )
+            debug_exception("Ricostruzione indice full-text fallita al termine del batch", exc, extra={"jobId": job_id, "databaseId": target_db_id, "phase": "ingestion-fts-final"})
             errors.append({"file": "<fts>", "error": str(exc)})
             job["errors"] = errors
-
     job["chunksCreated"] = total_chunks
     if job["filesProcessed"] == 0 or total_chunks == 0:
         job["status"] = "failed"
+        job["stage"] = "failed"
+        job["progressPercent"] = 0.0 if not job["filesProcessed"] else job.get("progressPercent", 0.0)
         job["currentFile"] = None
         job["updatedAt"] = time.time()
         job["error"] = "Nessun chunk è stato generato dai file elaborati. Controlla i contenuti dei documenti." if total_chunks == 0 else "Nessun file e' stato indicizzato. Controlla gli errori del job."
     else:
         job["status"] = "completed"
+        job["stage"] = "ready"
+        job["progressPercent"] = 100.0
         job["currentFile"] = None
         job["updatedAt"] = time.time()
         if errors:
             job["error"] = f"{len(errors)} file/eventi hanno prodotto errori; gli altri file sono stati processati."
 
+    _persist_ingestion_jobs()
     # Le sorgenti restano nel database per permettere il re-index.
+
+_load_ingestion_jobs()
+
 
 @app.post("/api/ingest")
 async def process_ingest(
@@ -1111,10 +1196,14 @@ async def process_ingest(
     job_id = str(uuid.uuid4())
     ingestion_jobs[job_id] = {
         "status": "pending",
+        "stage": "queued",
+        "progressPercent": 0.0,
         "chunksCreated": 0,
+        "chunksTotal": 0,
         "filesTotal": len(uploaded),
         "filesProcessed": 0,
         "filesFailed": 0,
+        "filesSkipped": 0,
         "databaseId": captured_db_id,
         "error": None,
         "errors": [],
@@ -1122,6 +1211,7 @@ async def process_ingest(
         "startedAt": time.time(),
         "updatedAt": time.time(),
     }
+    _persist_ingestion_jobs()
 
     batch_root = source_root / f"upload_{uuid.uuid4().hex}"
     batch_root.mkdir(parents=True, exist_ok=True)
@@ -1194,13 +1284,15 @@ async def process_ingest(
 
     if not saved_files:
         shutil.rmtree(batch_root, ignore_errors=True)
+        ingestion_jobs.pop(job_id, None)
+        _persist_ingestion_jobs()
         raise HTTPException(status_code=400, detail="Nessun file supportato trovato. Sono supportati PDF e JSON.")
 
     ingestion_jobs[job_id]["filesTotal"] = len(saved_files)
-    _schedule_ingestion_task(asyncio.to_thread(
+    _schedule_ingestion_task(_run_ingestion_with_limit(asyncio.to_thread(
         esegui_ingestion_batch_job, job_id, saved_files, batch_root,
         chunkSize or 512, chunkOverlap or 15, bool(ocrEnabled), captured_db_id
-    ))
+    )))
 
     return {
         "jobId": job_id,
@@ -1213,12 +1305,24 @@ async def process_ingest(
 
 @app.get("/api/ingest/status/{job_id}")
 def get_ingest_status(job_id: str):
-    if job_id not in ingestion_jobs:
-        raise HTTPException(status_code=404, detail="Job non trovato")
-    job = ingestion_jobs[job_id]
+    with _ingestion_jobs_lock:
+        if job_id not in ingestion_jobs:
+            raise HTTPException(status_code=404, detail="Job non trovato")
+        job = dict(ingestion_jobs[job_id])
     job["ageSeconds"] = max(0, int(time.time() - job.get("startedAt", time.time())))
     job["lastUpdateAgeSeconds"] = max(0, int(time.time() - job.get("updatedAt", time.time())))
     return job
+
+
+@app.get("/api/ingest/jobs")
+def get_ingest_jobs(limit: int = Query(50, ge=1, le=200)):
+    with _ingestion_jobs_lock:
+        jobs = [
+            {**job_id_data, "jobId": job_id}
+            for job_id, job_id_data in list(ingestion_jobs.items())[-limit:]
+        ]
+    jobs.sort(key=lambda job: job.get("updatedAt", 0), reverse=True)
+    return jobs
 
 
 def _build_telemetry_snapshot() -> List[Dict[str, Any]]:
