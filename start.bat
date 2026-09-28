@@ -20,9 +20,11 @@ REM ============================================================
 
 echo [1/3] Avvio Ollama in WSL...
 
-start "RAG AI - Ollama" cmd /k wsl --cd "%PROJECT_DIR%" -- ollama serve
+REM Avvia Ollama direttamente tramite wsl.exe.
+REM Se un server Ollama e' gia' attivo nella distro, non ne avvia un secondo.
+start "RAG AI - Ollama" wsl --cd "%PROJECT_DIR%" -- bash -lc "if pgrep -x ollama >/dev/null 2>&1; then echo '[OK] Ollama server gia attivo.'; else echo '[INFO] Avvio Ollama server...'; exec ollama serve; fi"
 
-echo Ollama avviato.
+echo Ollama command inviato a WSL.
 echo.
 
 REM ============================================================
