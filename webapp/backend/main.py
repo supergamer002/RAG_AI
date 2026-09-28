@@ -759,15 +759,28 @@ def reindex_document(document_id: str, background_tasks: BackgroundTasks):
     job_id = str(uuid.uuid4())
     captured_db_id = db_manager.active_id
     ingestion_jobs[job_id] = {
-        "status": "pending", "chunksCreated": 0, "filesTotal": 1, "filesProcessed": 0,
-        "filesFailed": 0, "databaseId": captured_db_id, "error": None, "errors": [],
-        "currentFile": target_doc["name"], "startedAt": time.time(), "updatedAt": time.time(),
+        "status": "pending",
+        "stage": "queued",
+        "progressPercent": 0.0,
+        "chunksCreated": 0,
+        "chunksTotal": 0,
+        "filesTotal": 1,
+        "filesProcessed": 0,
+        "filesFailed": 0,
+        "filesSkipped": 0,
+        "databaseId": captured_db_id,
+        "error": None,
+        "errors": [],
+        "currentFile": target_doc["name"],
+        "startedAt": time.time(),
+        "updatedAt": time.time(),
     }
+    _persist_ingestion_jobs()
 
     if target_path.exists():
-        _schedule_ingestion_task(
+        _schedule_ingestion_task(_run_ingestion_with_limit(
             esegui_ingestion_job(job_id, target_path, target_path.is_dir(), 512, 15, True, captured_db_id)
-        )
+        ))
     else:
         tabella = db_manager.get_active_table()
         background_tasks.add_task(crea_indice_fulltext, tabella)
