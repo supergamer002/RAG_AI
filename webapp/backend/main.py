@@ -26,15 +26,36 @@ from pydantic import BaseModel
 
 from rag.common.monitoring import tracciatore_globale
 from rag.common.schema import Chunk, TipoFonte, stima_token
-from rag.index.db_manager import db_manager
-from rag.index.embed import OllamaEmbedder
-from rag.index.embed_manager import embedder_manager
-from rag.index.store import upsert_chunks, conta_chunk
-from rag.retrieve.hybrid_search import ricerca_ibrida, crea_indice_fulltext
-from rag.retrieve.rerank import CrossEncoderReranker
-from rag.generate.answer import rispondi, OllamaGenerator
-from rag.ingest.from_units import ingest_file_unita, ingest_cartella_unita
-from rag.ingest.docling_extract import ingest_pdf
+
+# Keep the module importable in diagnostic mode even when a native RAG dependency
+# (PyArrow/LanceDB) cannot load. This lets /api/health report the real startup
+# failure instead of reducing it to a browser-level "Failed to fetch".
+RAG_IMPORT_ERROR: Optional[str] = None
+try:
+    from rag.index.db_manager import db_manager
+    from rag.index.embed import OllamaEmbedder
+    from rag.index.embed_manager import embedder_manager
+    from rag.index.store import upsert_chunks, conta_chunk
+    from rag.retrieve.hybrid_search import ricerca_ibrida, crea_indice_fulltext
+    from rag.retrieve.rerank import CrossEncoderReranker
+    from rag.generate.answer import rispondi, OllamaGenerator
+    from rag.ingest.from_units import ingest_file_unita, ingest_cartella_unita
+    from rag.ingest.docling_extract import ingest_pdf
+except Exception as exc:
+    RAG_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
+    db_manager = None
+    OllamaEmbedder = None
+    embedder_manager = None
+    upsert_chunks = None
+    conta_chunk = None
+    ricerca_ibrida = None
+    crea_indice_fulltext = None
+    CrossEncoderReranker = None
+    rispondi = None
+    OllamaGenerator = None
+    ingest_file_unita = None
+    ingest_cartella_unita = None
+    ingest_pdf = None
 
 CONFIG_PATH = Path("webapp/backend/config.json")
 
@@ -117,9 +138,9 @@ app.add_middleware(
 
 # Inizializzazione risorse
 # L'embedder e' ora gestito dinamicamente per database via embedder_manager
-reranker = CrossEncoderReranker(modello=config.get("crossEncoderModel", "BAAI/bge-reranker-v2-m3"))
+reranker = CrossEncoderReranker(modello=config.get("crossEncoderModel", "BAAI/bge-reranker-v2-m3")) if CrossEncoderReranker else None
 generatore_url = f"{config.get('ollamaUrl', 'http://localhost:11434').rstrip('/')}/api/chat"
-generatore = OllamaGenerator(url=generatore_url)
+generatore = OllamaGenerator(url=generatore_url) if OllamaGenerator else None
 
 ingestion_jobs: Dict[str, Dict[str, Any]] = {}
 _ingestion_tasks: set[asyncio.Task] = set()
@@ -184,6 +205,7 @@ def read_root():
 def get_health():
     ollama_ok = False
     ollama_detail = "Non raggiungibile"
+    startup_error = RAG_IMPORT_ERROR
     try:
         import requests
         r = requests.get(config.get("ollamaUrl", "http://localhost:11434"), timeout=2)
@@ -214,9 +236,11 @@ def get_health():
     except Exception as e:
         ollama_detail = f"Errore connessione: {str(e)}"
 
-    lancedb_ok = True
-    lancedb_detail = "OK"
+    lancedb_ok = RAG_IMPORT_ERROR is None
+    lancedb_detail = "OK" if lancedb_ok else f"Dipendenze RAG non caricabili: {RAG_IMPORT_ERROR}"
     try:
+        if db_manager is None:
+            raise RuntimeError(RAG_IMPORT_ERROR or "Database manager non disponibile")
         tabella = db_manager.get_active_table()
         tabella.count_rows()
         schema_vector = tabella.schema.field("vector")
@@ -232,6 +256,7 @@ def get_health():
         "lancedb_detail": lancedb_detail,
         "ollama": ollama_ok,
         "ollama_detail": ollama_detail,
+        "startup_error": startup_error,
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
 
