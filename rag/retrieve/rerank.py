@@ -50,15 +50,47 @@ class CrossEncoderReranker:
     def __init__(self, modello: str = MODELLO_RERANKER) -> None:
         self.modello_nome = modello
         self._modello = None  # caricato lazy al primo uso
+        self._load_error: str | None = None
+
+    def stato(self) -> dict[str, str | bool | None]:
+        """Restituisce lo stato runtime senza forzare il caricamento del modello."""
+        if self._modello is not None:
+            return {
+                "status": "ready",
+                "label": "Ready",
+                "model": self.modello_nome,
+                "loaded": True,
+                "error": None,
+            }
+        if self._load_error is not None:
+            return {
+                "status": "error",
+                "label": "Error",
+                "model": self.modello_nome,
+                "loaded": False,
+                "error": self._load_error,
+            }
+        return {
+            "status": "standby",
+            "label": "Lazy Standby",
+            "model": self.modello_nome,
+            "loaded": False,
+            "error": None,
+        }
 
     def _carica_modello(self):
         if self._modello is None:
-            from FlagEmbedding import FlagReranker
+            try:
+                from FlagEmbedding import FlagReranker
 
-            # use_fp16=True: dimezza la memoria a fronte di una perdita di
-            # precisione trascurabile per il reranking, importante con il
-            # vincolo di RAM del progetto.
-            self._modello = FlagReranker(self.modello_nome, use_fp16=True)
+                # use_fp16=True: dimezza la memoria a fronte di una perdita di
+                # precisione trascurabile per il reranking, importante con il
+                # vincolo di RAM del progetto.
+                self._modello = FlagReranker(self.modello_nome, use_fp16=True)
+                self._load_error = None
+            except Exception as exc:
+                self._load_error = f"{type(exc).__name__}: {exc}"
+                raise
         return self._modello
 
     def _calcola_punteggi(self, query: str, testi: list[str]) -> list[float]:
