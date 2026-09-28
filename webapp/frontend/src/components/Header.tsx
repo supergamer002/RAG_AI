@@ -1,4 +1,4 @@
-import { apiFetch, apiJson, apiUrl, getApiToken, setApiToken } from '../api';
+import { apiFetch, formatApiError } from '../api';
 import React, { useState, useEffect } from 'react';
 import { ThemeMode } from '../types';
 
@@ -23,6 +23,7 @@ export const Header: React.FC<HeaderProps> = ({
   searchFilter,
   onSearchChange,
 }) => {
+  const [healthError, setHealthError] = useState<string | null>(null);
   const [health, setHealth] = useState<{ fastapi: boolean; lancedb: boolean; ollama: boolean }>({
     fastapi: true,
     lancedb: true,
@@ -35,6 +36,7 @@ export const Header: React.FC<HeaderProps> = ({
         .then((res) => res.ok ? res.json() : null)
         .then((data) => {
           if (data) {
+            setHealthError(null);
             setHealth({
               fastapi: !!data.fastapi,
               lancedb: !!data.lancedb,
@@ -42,7 +44,8 @@ export const Header: React.FC<HeaderProps> = ({
             });
           }
         })
-        .catch(() => {
+        .catch((err) => {
+          setHealthError(formatApiError(err, 'Health check'));
           setHealth({ fastapi: false, lancedb: false, ollama: false });
         });
     };
@@ -160,41 +163,22 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
             <div
               className="w-8 h-8 rounded-lg bg-[#262a35] hover:bg-[#353944] text-[#bcc9cd] hover:text-[#dfe2f1] flex items-center justify-center transition-colors border border-[#3d494c]/30 cursor-pointer relative"
-              title="Notifiche di Sistema"
+              title={healthError || "Notifiche di Sistema"}
             >
               <span className="material-symbols-outlined text-[18px]">notifications</span>
               <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-[#4cd7f6]" />
             </div>
           </div>
 
-          {/* Profile Avatar */}
-          <div className="relative group">
-            <div className="w-8 h-8 rounded-full overflow-hidden border border-[#4cd7f6]/60 shadow-[0_0_10px_rgba(76,215,246,0.3)] bg-[#262a35] flex items-center justify-center cursor-pointer">
-              <img
-                src="/src/assets/images/avatar_engineer_1790318921439.jpg"
-                alt="RAG Engineer"
-                referrerPolicy="no-referrer"
-                onError={(e) => {
-                  // Fallback to SVG icon if image fails
-                  const target = e.currentTarget;
-                  target.style.display = 'none';
-                  const parent = target.parentElement;
-                  if (parent) {
-                    const fallback = document.createElement('span');
-                    fallback.className = 'material-symbols-outlined text-[#003640] text-[18px]';
-                    fallback.innerText = 'person';
-                    parent.className = 'w-8 h-8 rounded-full bg-[#4cd7f6] flex items-center justify-center';
-                    parent.appendChild(fallback);
-                  }
-                }}
-                className="w-full h-full object-cover"
-              />
-            </div>
-            <div className="absolute right-0 top-10 hidden group-hover:flex flex-col bg-[#171b26] p-2.5 rounded-lg border border-[#262a35] shadow-xl text-[11px] text-[#dfe2f1] w-44 z-50">
-              <span className="font-semibold">Dev &amp; Telemetry Ops</span>
-              <span className="font-mono text-[#bcc9cd]">supergamerfailer002</span>
-              <span className="mt-1 text-[10px] text-[#4cd7f6] font-mono">Cluster: europe-west2</span>
-            </div>
+          {/* Runtime status — deliberately non-interactive until a real identity provider exists */}
+          <div
+            className="w-8 h-8 rounded-full border border-[#3d494c]/60 bg-[#262a35] flex items-center justify-center"
+            title={healthError || 'Stato runtime RAG'}
+            aria-label="Stato runtime RAG"
+          >
+            <span className={`material-symbols-outlined text-[18px] ${health.fastapi ? 'text-[#4cd7f6]' : 'text-[#ffb4ab]'}`}>
+              {health.fastapi ? 'hub' : 'cloud_off'}
+            </span>
           </div>
         </div>
       </div>
