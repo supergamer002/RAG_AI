@@ -12,6 +12,7 @@ import logging
 import uuid
 import time
 import os
+import secrets
 import tempfile
 import shutil
 from collections import defaultdict, deque
@@ -150,6 +151,8 @@ config = caricaconfig()
 # Protezione API opzionale: se apiToken e' configurato, tutte le API operative
 # richiedono Bearer token. Il rate limit resta attivo anche senza token.
 _rate_buckets: dict[str, deque[float]] = defaultdict(deque)
+_stream_tickets: dict[str, float] = {}
+_STREAM_TICKET_TTL = 60
 _RATE_EXEMPT = {"/", "/api/health", "/api/auth/status"}
 _AUTH_EXEMPT = {"/", "/api/health", "/api/auth/status", "/api/settings/defaults"}
 
@@ -175,9 +178,11 @@ async def api_security(request: Request, call_next):
     if configured_token and not auth_exempt:
         auth = request.headers.get("authorization", "")
         supplied = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
-        # EventSource non supporta header custom: accetta token query solo per lo stream SSE.
         if path == "/api/telemetry/stream" and not supplied:
-            supplied = request.query_params.get("token", "")
+            ticket = request.query_params.get("ticket", "")
+            expires_at = _stream_tickets.pop(ticket, None) if ticket else None
+            if expires_at is not None and expires_at >= now:
+                supplied = configured_token
         if supplied != configured_token:
             from fastapi.responses import JSONResponse
             return JSONResponse(status_code=401, content={"detail": "API token mancante o non valido."})
@@ -1048,6 +1053,17 @@ def _build_telemetry_snapshot() -> List[Dict[str, Any]]:
 @app.get("/api/telemetry")
 def get_telemetry():
     return _build_telemetry_snapshot()
+
+
+@app.post("/api/telemetry/stream-ticket")
+def create_telemetry_stream_ticket():
+    now = time.time()
+    expired = [ticket for ticket, expires_at in _stream_tickets.items() if expires_at < now]
+    for ticket in expired:
+        _stream_tickets.pop(ticket, None)
+    ticket = secrets.token_urlsafe(32)
+    _stream_tickets[ticket] = now + _STREAM_TICKET_TTL
+    return {"ticket": ticket, "expiresIn": _STREAM_TICKET_TTL}
 
 
 @app.get("/api/telemetry/stream")
