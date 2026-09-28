@@ -1347,3 +1347,19 @@ The light GUI should be redesigned around semantic theme tokens. The supplied re
 **NEXT EXACT ROOT-CAUSE TARGET:** reproduce one folder ingest while observing the network request and `/api/ingest/status/{jobId}`, then correlate that runtime trace with the per-file FTS rebuild path.
 
 **STOP CONDITION:** do not start GUI polishing or background-job refactoring by guessing at the folder failure. First capture the folder request/job transition and establish whether the observed failure is upload validation, job creation, first-file processing, embedding, or FTS finalization.
+
+
+## 21. Applied fixes — Round 12
+
+- Batch ingestion now rebuilds the FTS index once at the end instead of once per file.
+- Ingestion jobs now expose `stage`, `progressPercent`, `chunksTotal` and `filesSkipped`.
+- Large single-file jobs can report embedding progress before the file completes.
+- Ingestion monitoring no longer treats 30 minutes or five transient polling errors as ingestion failure.
+- Ingestion jobs are persisted locally and exposed through `GET /api/ingest/jobs`; interrupted jobs are marked explicitly after backend restart.
+- `workerConcurrency` is connected to a process-level ingestion semaphore; runtime reload recreates the semaphore from current settings.
+- Re-index jobs use the same concurrency/lifecycle flow.
+- Unsupported folder files are reported instead of being silently ignored.
+- Knowledge Nodes now displays recent persistent ingestion jobs and their backend progress.
+- Retrieval fallback now rebuilds FTS only for errors whose message indicates an FTS/index failure.
+- Frontend ingestion code removed stale API imports/constants.
+- Light theme now maps the legacy arbitrary dark palette utilities onto the semantic light-theme tokens.
