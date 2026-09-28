@@ -18,7 +18,7 @@ from collections import defaultdict, deque
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Query, BackgroundTasks, Request
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from starlette.background import BackgroundTask
