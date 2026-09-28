@@ -335,3 +335,56 @@ The correct next step is therefore **root-cause the RAG import failure first**, 
 
 - Exact native import failure in the user's environment remains unverified.
 - Successful LanceDB/PyArrow initialization, DB endpoints, ingestion and query remain unverified.
+
+
+## 14. Applied fixes — Round 5 / Windows native DLL
+
+User runtime update: the application fixes were applied, but Windows still blocks the native `arrow_acero.dll` DLL.
+
+### Current interpretation
+
+The remaining blocker is now classified as a **Windows native dependency loading problem**, not as a FastAPI routing/state bug.
+
+`arrow_acero.dll` belongs to the native Arrow/PyArrow stack used by the RAG/LanceDB dependency chain. If Windows prevents that DLL from loading, the affected Python import can still fail even though the Python packages are installed correctly.
+
+The backend's new per-component import isolation and centralized degraded-mode handling should prevent this native failure from becoming an opaque cascade of `AttributeError`/500 responses.
+
+### Required verification
+
+On the same Windows Python environment used to launch the backend:
+
+```powershell
+python -c "import pyarrow; print(pyarrow.__version__)"
+python -c "import pyarrow.dataset; print('pyarrow.dataset OK')"
+python -c "import lancedb; print('lancedb OK')"
+```
+
+Then:
+
+```
+GET /api/health
+```
+
+The important fields are:
+- `lancedb`
+- `lancedb_detail`
+- `startup_error`
+- `component_errors`
+
+### Windows-specific blocker
+
+If the import still reports `arrow_acero.dll` as blocked, the next investigation must be at the Windows DLL-loading/security layer rather than in application Python code.
+
+Do not replace the working FastAPI/RAG error handling merely to hide this condition.
+
+### Audit state
+
+- Python syntax blocker: CLOSED.
+- `db_manager=None` cascading 500 behavior: FIXED at application-error-handling level.
+- Native `arrow_acero.dll` Windows loading: **OPEN / current blocker**.
+- Full LanceDB/database runtime: BLOCKED until the native dependency loads.
+- Ingestion/query end-to-end: BLOCKED by the same dependency chain.
+
+**NEXT EXACT TEST:** run the three Python import commands above and capture the first command that fails, including its complete exception text.
+
+**STOP CONDITION:** do not continue modifying RAG query/ingestion logic while `arrow_acero.dll` cannot be loaded by the same Python interpreter running FastAPI.
