@@ -398,7 +398,7 @@ The user reports that a large portion of API requests fail at runtime. The next 
 
 ### Uvicorn debug-mode decision
 
-The current Uvicorn CLI does **not** expose a `--debug` option. Its documented development/logging controls include `--reload` and `--log-level debug`. citeturn417086search0turn417086search1
+The current Uvicorn CLI does **not** expose a `--debug` option. Its documented development/logging controls include `--reload` and `--log-level debug`. This was verified against the current Uvicorn documentation.
 
 To keep the behavior explicit and stable, the project now uses two mechanisms:
 
