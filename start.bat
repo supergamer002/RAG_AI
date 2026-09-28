@@ -20,7 +20,7 @@ REM ============================================================
 
 echo [1/3] Avvio Ollama in WSL...
 
-start "RAG AI - Ollama" cmd /k "wsl --cd "%PROJECT_DIR%" -- ollama serve"
+start "RAG AI - Ollama" cmd /k wsl --cd "%PROJECT_DIR%" -- ollama serve
 
 echo Ollama avviato.
 echo.
@@ -50,7 +50,7 @@ REM ============================================================
 
 echo [3/3] Avvio backend FastAPI in modalita' debug...
 
-start "RAG AI Backend (FastAPI - DEBUG)" cmd /k "wsl --cd "%PROJECT_DIR%" -- env RAG_DEBUG=1 python -m uvicorn webapp.backend.main:app --host 0.0.0.0 --port 8000 --reload --log-level debug"
+start "RAG AI Backend (FastAPI - DEBUG)" cmd /k wsl --cd "%PROJECT_DIR%" -- env RAG_DEBUG=1 python -m uvicorn webapp.backend.main:app --host 0.0.0.0 --port 8000 --reload --log-level debug
 
 echo.
 echo Backend:
