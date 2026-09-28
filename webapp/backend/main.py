@@ -471,7 +471,12 @@ def delete_database(database_id: str):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except OSError as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        debug_exception(
+            "Eliminazione database fallita",
+            e,
+            extra={"route": "/api/databases/{database_id}", "databaseId": database_id},
+        )
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @app.get("/api/databases/{database_id}/export")
@@ -1038,6 +1043,16 @@ async def process_ingest(
         source_root = db_root / "sources"
         source_root.mkdir(parents=True, exist_ok=True)
     except (KeyError, OSError) as exc:
+        debug_exception(
+            "Preparazione storage sorgenti fallita",
+            exc,
+            request=None,
+            extra={
+                "route": "/api/ingest",
+                "databaseId": captured_db_id,
+                "phase": "prepare-source-storage",
+            },
+        )
         raise HTTPException(status_code=500, detail=f"Impossibile preparare lo storage delle sorgenti: {exc}") from exc
 
     job_id = str(uuid.uuid4())
@@ -1111,6 +1126,16 @@ async def process_ingest(
         shutil.rmtree(batch_root, ignore_errors=True)
         raise
     except OSError as exc:
+        debug_exception(
+            "Salvataggio upload ingest fallito",
+            exc,
+            extra={
+                "route": "/api/ingest",
+                "databaseId": captured_db_id,
+                "batchRoot": str(batch_root),
+                "phase": "save-upload",
+            },
+        )
         shutil.rmtree(batch_root, ignore_errors=True)
         raise HTTPException(status_code=500, detail=f"Impossibile salvare i file caricati: {exc}") from exc
 
@@ -1556,7 +1581,18 @@ def _esegui_query_su_tabella(
                 top_n=top_n,
                 tracciatore=tracciatore_globale,
             )
-    except Exception:
+    except Exception as exc:
+        debug_exception(
+            "Reranking RAG fallito; viene usato il ranking precedente",
+            exc,
+            extra={
+                "phase": "rerank",
+                "searchMode": search_mode,
+                "candidateCount": len(candidati),
+                "topN": top_n,
+                "databaseId": database_id or getattr(db_manager, "active_id", None),
+            },
+        )
         candidati_rerankati = candidati[:top_n]
 
     try:
@@ -1567,6 +1603,16 @@ def _esegui_query_su_tabella(
             tracciatore=tracciatore_globale,
         )
     except Exception as e:
+        debug_exception(
+            "Generazione LLM fallita; viene restituito il fallback contestuale",
+            e,
+            extra={
+                "phase": "generation",
+                "queryLength": len(req.query or ""),
+                "candidateCount": len(candidati_rerankati),
+                "databaseId": database_id or getattr(db_manager, "active_id", None),
+            },
+        )
         answer_text = (
             f"Errore durante la generazione LLM ({e}). "
             "Ecco i passaggi principali trovati nel contesto:\n"
@@ -1694,6 +1740,16 @@ async def run_evaluations():
                             break
                     eval_jobs[job_id]["updatedAt"] = time.time()
                 except Exception as exc:
+                    debug_exception(
+                        "Caso di valutazione RAG fallito",
+                        exc,
+                        extra={
+                            "jobId": job_id,
+                            "testCaseId": test_case.get("id"),
+                            "databaseId": captured_db_id,
+                            "phase": "evaluation-case",
+                        },
+                    )
                     case_results.append({
                         **test_case,
                         "retrievedDocs": [],
@@ -1738,6 +1794,15 @@ async def run_evaluations():
                 "error": f"{len(errors)} casi non valutabili" if errors else None,
             }
         except Exception as exc:
+            debug_exception(
+                "Job di valutazione RAG fallito",
+                exc,
+                extra={
+                    "jobId": job_id,
+                    "databaseId": captured_db_id,
+                    "phase": "evaluation-job",
+                },
+            )
             eval_jobs[job_id] = {
                 "status": "failed",
                 "results": [],
