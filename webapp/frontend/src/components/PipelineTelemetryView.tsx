@@ -21,6 +21,8 @@ export const PipelineTelemetryView: React.FC<PipelineTelemetryViewProps> = ({
   const [isPaused, setIsPaused] = useState(false);
   const [streamStatus, setStreamStatus] = useState<'connecting' | 'connected' | 'paused' | 'error'>('connecting');
   const [streamError, setStreamError] = useState<string | null>(null);
+  const reconnectTimerRef = React.useRef<number | null>(null);
+  const reconnectDelayRef = React.useRef(1000);
   const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
   useEffect(() => {
@@ -34,6 +36,7 @@ export const PipelineTelemetryView: React.FC<PipelineTelemetryViewProps> = ({
     const source = new EventSource(streamUrl);
     setStreamStatus('connecting');
     setStreamError(null);
+    reconnectDelayRef.current = 1000;
 
     const handleTelemetry = (event: MessageEvent<string>) => {
       try {
@@ -54,10 +57,21 @@ export const PipelineTelemetryView: React.FC<PipelineTelemetryViewProps> = ({
       setStreamStatus('error');
       setStreamError(`Stream SSE non raggiungibile: ${streamUrl}`);
       source.close();
+      if (!isPaused) {
+        reconnectTimerRef.current = window.setTimeout(() => {
+          reconnectTimerRef.current = null;
+          connectStream();
+        }, reconnectDelayRef.current);
+        reconnectDelayRef.current = Math.min(reconnectDelayRef.current * 2, 30000);
+      }
     };
 
     return () => {
       source.close();
+      if (reconnectTimerRef.current !== null) {
+        window.clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
     };
   }, [API_BASE_URL, isPaused, onLogsUpdate]);
 
