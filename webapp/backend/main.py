@@ -43,7 +43,22 @@ try:
     from rag.ingest.docling_extract import ingest_pdf
 except Exception as exc:
     RAG_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
-    db_manager = None
+
+    class _UnavailableDatabaseManager:
+        """Central degraded-mode guard for every database-dependent endpoint."""
+
+        def __getattr__(self, _name: str) -> Any:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "rag_dependency_unavailable",
+                    "message": "Il layer RAG/LanceDB non è disponibile in questo processo.",
+                    "startupError": RAG_IMPORT_ERROR,
+                    "hint": "Controllare /api/health e correggere la dipendenza/import indicata, quindi riavviare il backend.",
+                },
+            )
+
+    db_manager = _UnavailableDatabaseManager()
     OllamaEmbedder = None
     embedder_manager = None
     upsert_chunks = None
@@ -239,8 +254,8 @@ def get_health():
     lancedb_ok = RAG_IMPORT_ERROR is None
     lancedb_detail = "OK" if lancedb_ok else f"Dipendenze RAG non caricabili: {RAG_IMPORT_ERROR}"
     try:
-        if db_manager is None:
-            raise RuntimeError(RAG_IMPORT_ERROR or "Database manager non disponibile")
+        if RAG_IMPORT_ERROR is not None:
+            raise RuntimeError(RAG_IMPORT_ERROR)
         tabella = db_manager.get_active_table()
         tabella.count_rows()
         schema_vector = tabella.schema.field("vector")
