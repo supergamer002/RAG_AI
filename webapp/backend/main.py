@@ -1732,10 +1732,18 @@ def _esegui_query_su_tabella(
                 search_mode=search_mode,
                 hybrid_alpha=hybrid_alpha,
             )
-    except (ValueError, KeyError, RuntimeError) as exc:
-        # FTS/index errors can be recovered by rebuilding the index. Other
-        # exceptions must remain visible instead of being silently masked.
-        logger.warning("Retrieval fallback: rebuilding FTS index after %s: %s", type(exc).__name__, exc)
+    except (ValueError, RuntimeError) as exc:
+        error_text = str(exc).lower()
+        fts_related = any(term in error_text for term in (
+            "fts", "full-text", "tantivy", "create_index", "list_indices", "index"
+        ))
+        if not fts_related or search_mode not in {"hybrid", "sparse"}:
+            raise
+        debug_exception(
+            "Retrieval FTS non disponibile; ricostruzione indice",
+            exc,
+            extra={"phase": "retrieval-fts-rebuild", "searchMode": search_mode},
+        )
         crea_indice_fulltext(tabella)
         candidati = ricerca_ibrida(
             tabella,
@@ -1743,6 +1751,8 @@ def _esegui_query_su_tabella(
             query_testo=req.query,
             top_k=top_k,
             tracciatore=tracciatore_globale,
+            search_mode=search_mode,
+            hybrid_alpha=hybrid_alpha,
         )
 
     initial_rank_map = {c.get("chunk_id", str(i)): i for i, c in enumerate(candidati)}
