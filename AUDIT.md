@@ -318,3 +318,20 @@ The backend is now able to start, but it starts in a degraded state because the 
 The correct next step is therefore **root-cause the RAG import failure first**, then enforce a centralized 503 degraded-mode contract for DB-dependent routes.
 
 **Audit status: OPEN — P0 native RAG import/dependency failure and degraded DB state.**
+
+
+## 13. Applied fixes — Round 4
+
+- Global RAG imports are now isolated per component; secondary import failures no longer disable a working database manager.
+- Database-unavailable mode is centralized as HTTP 503 instead of raw `AttributeError`/500.
+- `/api/health` now separates database import status from other component import errors and exposes `component_errors`.
+- SSE reconnect uses a self-contained exponential-backoff loop.
+- Authenticated SSE uses a one-time 60-second ticket instead of the long-lived API token in the URL.
+- The SSE frontend no longer references an undefined `connectStream()`.
+- `BackgroundTasks` is explicitly imported for the re-index route.
+- `requirements.txt` now declares LanceDB, PyArrow, Requests, pypdf and Docling dependencies explicitly.
+
+### Still open
+
+- Exact native import failure in the user's environment remains unverified.
+- Successful LanceDB/PyArrow initialization, DB endpoints, ingestion and query remain unverified.
