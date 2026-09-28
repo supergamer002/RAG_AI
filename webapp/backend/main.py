@@ -1302,6 +1302,13 @@ async def process_ingest(
         raise HTTPException(status_code=400, detail="Nessun file supportato trovato. Sono supportati PDF e JSON.")
 
     ingestion_jobs[job_id]["filesTotal"] = len(saved_files)
+    ingestion_jobs[job_id]["filesSkipped"] = max(0, len(uploaded) - len(saved_files))
+    if ingestion_jobs[job_id]["filesSkipped"]:
+        ingestion_jobs[job_id]["errors"].append({
+            "file": "<unsupported>",
+            "error": f"{ingestion_jobs[job_id]['filesSkipped']} file non supportati ignorati; formati ammessi: PDF e JSON.",
+        })
+    _persist_ingestion_jobs()
     _schedule_ingestion_task(_run_ingestion_with_limit(asyncio.to_thread(
         esegui_ingestion_batch_job, job_id, saved_files, batch_root,
         chunkSize or 512, chunkOverlap or 15, bool(ocrEnabled), captured_db_id
@@ -1431,8 +1438,9 @@ def restart_runtime():
     Questo endpoint NON riavvia il processo FastAPI né invia segnali al worker:
     aggiorna solamente gli oggetti runtime che dipendono dalla configurazione.
     """
-    global config, reranker, generatore
+    global config, reranker, generatore, _ingestion_semaphore
     config = caricaconfig()
+    _ingestion_semaphore = None
     # Aggiorna il DatabaseManager per riflettere eventuali modifiche a storagePath
     db_manager._load_registry()
     # L'embedder e' ora gestito dinamicamente per database via embedder_manager
