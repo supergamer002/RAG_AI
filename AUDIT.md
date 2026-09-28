@@ -388,3 +388,146 @@ Do not replace the working FastAPI/RAG error handling merely to hide this condit
 **NEXT EXACT TEST:** run the three Python import commands above and capture the first command that fails, including its complete exception text.
 
 **STOP CONDITION:** do not continue modifying RAG query/ingestion logic while `arrow_acero.dll` cannot be loaded by the same Python interpreter running FastAPI.
+
+
+## 15. Applied fixes — Round 6 / Backend debug mode and persistent error tracing
+
+### User runtime finding
+
+The user reports that a large portion of API requests fail at runtime. The next objective is therefore to make every relevant failure diagnosable from the same WSL process that serves FastAPI, without relying on browser-only "Failed to fetch" messages.
+
+### Uvicorn debug-mode decision
+
+The current Uvicorn CLI does **not** expose a `--debug` option. Its documented development/logging controls include `--reload` and `--log-level debug`. citeturn417086search0turn417086search1
+
+To keep the behavior explicit and stable, the project now uses two mechanisms:
+
+1. launcher-level `RAG_DEBUG=1` to enable the application's debug logger deterministically;
+2. Uvicorn `--log-level debug` to enable detailed server logging.
+
+The application also recognizes an already-debug-enabled Uvicorn logger when possible, so a manual `--log-level debug` invocation can activate the same logging path.
+
+### New diagnostic component
+
+New file:
+
+`webapp/backend/debug_logging.py`
+
+Responsibilities:
+
+- determines whether debug mode is active;
+- creates/uses exactly one file handler even under Uvicorn reload;
+- writes to **`log_debug.log` at the project root**;
+- uses `RotatingFileHandler` with 10 MB maximum per file and 3 backups;
+- never allows a logging failure to prevent application startup;
+- records full Python traceback for real exceptions;
+- records sanitized runtime and environment information;
+- records installed package versions without importing those packages;
+- records request method/path/query/client and a safe subset of headers;
+- redacts token/password/API-key/cookie/credential fields and proxy URLs.
+
+### Request exception flow
+
+A global FastAPI middleware now wraps request execution:
+
+`request → route/middleware chain → response`
+
+Branch A — no exception:
+
+`response returned → normal response`
+
+Branch B — unhandled exception:
+
+`route → exception → debug_exception() → log_debug.log with traceback/runtime/env → exception re-raised → FastAPI/Uvicorn keeps normal HTTP error handling`
+
+This is intentional: the logging layer observes the failure without replacing the application's error semantics.
+
+Branch C — a route internally catches an exception and returns a controlled fallback:
+
+The affected code paths now call `debug_exception()` before falling back or raising an HTTP error. This prevents silent failures from disappearing from the diagnostic record.
+
+### Covered high-value failure paths
+
+The debug logger is now explicitly connected to:
+
+- RAG component import failures during module startup;
+- unhandled HTTP request exceptions;
+- query pipeline failures;
+- reranking fallback failures;
+- LLM generation fallback failures;
+- single-file ingestion job failures;
+- batch ingestion database-open failures;
+- per-file ingestion failures;
+- FTS rebuild failures during ingestion;
+- database deletion OSError failures;
+- ingestion source-storage preparation failures;
+- upload save failures;
+- evaluation case failures;
+- evaluation job failures.
+
+This is deliberately broader than only logging HTTP 500 responses: background jobs and swallowed pipeline fallbacks can fail without producing a request-level exception.
+
+### Sensitive-data policy
+
+`log_debug.log` is a local diagnostic artifact and is now explicitly ignored by Git.
+
+The logger does **not** write the request body. This avoids dumping uploaded document contents or arbitrary JSON payloads into the debug file.
+
+The environment snapshot is selective rather than a raw dump of all environment variables. Known secret-bearing keys are redacted, and HTTP/HTTPS proxy values are redacted completely because they can embed credentials.
+
+### Startup launcher
+
+A canonical root-level `start.bat` has been added.
+
+Its backend command is:
+
+`wsl --cd "%PROJECT_DIR%" -- env RAG_DEBUG=1 python -m uvicorn webapp.backend.main:app --host 0.0.0.0 --port 8000 --reload --log-level debug`
+
+Ollama and the frontend continue to run inside WSL.
+
+This avoids depending on a nonexistent Uvicorn `--debug` flag and ensures the debug flag reaches the same Linux/WSL Python process that loads LanceDB/PyArrow.
+
+### Stability properties
+
+- no debug logging when debug mode is off;
+- idempotent handler installation under reload;
+- bounded log file growth through rotation;
+- logging failures are fail-open and cannot block API startup;
+- sensitive configuration values are redacted;
+- background-task failures are logged separately from request failures;
+- the diagnostic middleware does not alter successful responses;
+- existing controlled HTTP error contracts remain intact.
+
+### Verification status
+
+The changes are source-level and launcher-level. They have **not** yet been runtime-verified in the user's WSL environment in this turn.
+
+Required verification after the next startup:
+
+1. start with `start.bat`;
+2. reproduce one failing API request;
+3. inspect project-root `log_debug.log`;
+4. confirm the file contains:
+   - timestamp;
+   - endpoint/method;
+   - exception type/message;
+   - complete traceback;
+   - Python executable/version;
+   - platform/architecture;
+   - relevant WSL/Python/Ollama/debug environment;
+   - installed versions for key packages;
+5. use the **first root exception** in the log as the next audit target.
+
+### Current audit state
+
+- Native Windows `arrow_acero.dll` blocker: bypassed for the application runtime by using the verified WSL environment; Windows-side native load remains irrelevant to the WSL backend path.
+- Debug instrumentation: **APPLIED**.
+- Persistent error traceback: **APPLIED**.
+- Controlled and redacted runtime/environment snapshot: **APPLIED**.
+- WSL debug launcher: **APPLIED**.
+- Actual causes of the current API failures: **OPEN** until the first WSL `log_debug.log` traceback is captured.
+- E2E ingestion/query/API verification: **OPEN**.
+
+**NEXT EXACT ACTION:** run the updated `start.bat`, reproduce the first failing API call, and use the first exception/traceback in `log_debug.log` as the root-cause input.
+
+**STOP CONDITION:** do not patch individual endpoints solely from the browser error message. The next fix should follow the first concrete traceback and its function-flow branch.
