@@ -24,6 +24,8 @@ export const Header: React.FC<HeaderProps> = ({
   onSearchChange,
 }) => {
   const [healthError, setHealthError] = useState<string | null>(null);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [notifications, setNotifications] = useState<Array<{ id: string; title: string; message: string; time: string; unread: boolean }>>([]);
   const [health, setHealth] = useState<{ fastapi: boolean; lancedb: boolean; ollama: boolean }>({
     fastapi: true,
     lancedb: true,
@@ -36,17 +38,54 @@ export const Header: React.FC<HeaderProps> = ({
         .then((res) => res.ok ? res.json() : null)
         .then((data) => {
           if (data) {
-            setHealthError(null);
-            setHealth({
+            const nextHealth = {
               fastapi: !!data.fastapi,
               lancedb: !!data.lancedb,
               ollama: !!data.ollama,
+            };
+            setHealthError(null);
+            setHealth((previous) => {
+              const changedServices = [
+                ['FastAPI', previous.fastapi, nextHealth.fastapi],
+                ['LanceDB', previous.lancedb, nextHealth.lancedb],
+                ['Ollama', previous.ollama, nextHealth.ollama],
+              ].filter(([, oldValue, newValue]) => oldValue !== newValue);
+
+              if (changedServices.length > 0) {
+                const now = new Date().toLocaleTimeString();
+                setNotifications((current) => [
+                  ...changedServices.map(([service, , enabled]) => ({
+                    id: `${service}-${Date.now()}-${enabled}`,
+                    title: `${service} ${enabled ? 'online' : 'non disponibile'}`,
+                    message: enabled
+                      ? `${service} è tornato operativo.`
+                      : `${service} non è attualmente disponibile.`,
+                    time: now,
+                    unread: true,
+                  })),
+                  ...current,
+                ].slice(0, 20));
+              }
+
+              return nextHealth;
             });
           }
         })
         .catch((err) => {
-          setHealthError(formatApiError(err, 'Health check'));
-          setHealth({ fastapi: false, lancedb: false, ollama: false });
+          const message = formatApiError(err, 'Health check');
+          setHealthError(message);
+          setHealth((previous) => {
+            if (previous.fastapi || previous.lancedb || previous.ollama) {
+              setNotifications((current) => [{
+                id: `backend-error-${Date.now()}`,
+                title: 'Backend non raggiungibile',
+                message,
+                time: new Date().toLocaleTimeString(),
+                unread: true,
+              }, ...current].slice(0, 20));
+            }
+            return { fastapi: false, lancedb: false, ollama: false };
+          });
         });
     };
 
@@ -54,6 +93,18 @@ export const Header: React.FC<HeaderProps> = ({
     const interval = setInterval(checkHealth, 5000);
     return () => clearInterval(interval);
   }, []);
+
+  const unreadCount = notifications.filter((notification) => notification.unread).length;
+
+  const handleOpenNotifications = () => {
+    setNotificationsOpen((open) => !open);
+    setNotifications((current) => current.map((notification) => ({ ...notification, unread: false })));
+  };
+
+  const handleClearNotifications = () => {
+    setNotifications([]);
+    setNotificationsOpen(false);
+  };
 
   return (
     <header className="fixed top-0 left-64 right-0 h-16 bg-[#0f131d]/85 backdrop-blur-xl z-40 border-b border-[#262a35]/60">
@@ -161,14 +212,67 @@ export const Header: React.FC<HeaderProps> = ({
             >
               <span className="material-symbols-outlined text-[18px]">terminal</span>
             </button>
-            <div
-              className="w-8 h-8 rounded-lg bg-[#262a35] text-[#bcc9cd] flex items-center justify-center border border-[#3d494c]/30 relative"
-              title={healthError || "Stato diagnostico runtime"}
-              aria-label={healthError || "Stato diagnostico runtime"}
-            >
-              <span className="material-symbols-outlined text-[18px]">notifications_none</span>
-              {healthError && (
-                <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-[#ffb4ab]" />
+            <div className="relative">
+              <button
+                type="button"
+                onClick={handleOpenNotifications}
+                className="w-8 h-8 rounded-lg bg-[#262a35] hover:bg-[#353944] text-[#bcc9cd] hover:text-[#dfe2f1] flex items-center justify-center transition-colors border border-[#3d494c]/30 cursor-pointer"
+                title="Apri notifiche runtime"
+                aria-label="Apri notifiche runtime"
+                aria-expanded={notificationsOpen}
+              >
+                <span className="material-symbols-outlined text-[18px]">
+                  {unreadCount > 0 ? 'notifications' : 'notifications_none'}
+                </span>
+                {(unreadCount > 0 || healthError) && (
+                  <span className="absolute -top-0.5 -right-0.5 min-w-[13px] h-[13px] px-0.5 rounded-full bg-[#ffb4ab] text-[#35100d] text-[8px] font-bold flex items-center justify-center">
+                    {unreadCount > 9 ? '9+' : unreadCount || '!'}
+                  </span>
+                )}
+              </button>
+
+              {notificationsOpen && (
+                <div className="absolute right-0 top-10 w-80 max-w-[calc(100vw-2rem)] rounded-xl border border-[#3d494c]/50 bg-[#171b26] shadow-2xl overflow-hidden z-50">
+                  <div className="flex items-center justify-between px-4 py-3 border-b border-[#262a35]">
+                    <div>
+                      <div className="text-[12px] font-semibold text-[#dfe2f1]">Notifiche runtime</div>
+                      <div className="text-[10px] font-mono text-[#869397]">{notifications.length} eventi</div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleClearNotifications}
+                      className="text-[10px] font-mono text-[#869397] hover:text-[#dfe2f1] cursor-pointer"
+                    >
+                      Cancella
+                    </button>
+                  </div>
+
+                  <div className="max-h-80 overflow-y-auto">
+                    {notifications.length === 0 ? (
+                      <div className="px-4 py-6 text-center text-[11px] text-[#869397]">
+                        Nessuna nuova notifica.
+                      </div>
+                    ) : (
+                      notifications.map((notification) => (
+                        <div
+                          key={notification.id}
+                          className={`px-4 py-3 border-b border-[#262a35]/70 last:border-b-0 ${notification.unread ? 'bg-[#1c1f2a]' : ''}`}
+                        >
+                          <div className="flex items-start gap-2">
+                            <span className="material-symbols-outlined text-[16px] text-[#4cd7f6] mt-0.5">
+                              {notification.title.includes('non disponibile') || notification.title.includes('non raggiungibile') ? 'error' : 'notifications'}
+                            </span>
+                            <div className="min-w-0">
+                              <div className="text-[11px] font-semibold text-[#dfe2f1]">{notification.title}</div>
+                              <div className="text-[10px] leading-4 text-[#bcc9cd] mt-0.5">{notification.message}</div>
+                              <div className="text-[9px] font-mono text-[#869397] mt-1">{notification.time}</div>
+                            </div>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
               )}
             </div>
           </div>
