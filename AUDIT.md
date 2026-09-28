@@ -661,3 +661,80 @@ Source/launcher fix applied, but actual Ollama process startup has not yet been 
 **NEXT EXACT TEST:** run `start.bat` and inspect the dedicated Ollama WSL terminal. It must show either `Ollama server gia attivo.` or the normal Ollama server startup output.
 
 **STOP CONDITION:** if the WSL terminal still exits immediately, capture its exact console error. The next fix must target that concrete WSL/Ollama error rather than changing FastAPI code.
+
+
+## 18. Applied fix — Round 9 / Ollama health semantics
+
+### User runtime evidence
+
+The uploaded debug log confirms that the backend runs inside WSL2 with:
+- Python `/usr/bin/python`;
+- Linux/WSL2 x86_64;
+- LanceDB `0.39.0`;
+- PyArrow `25.0.1`;
+- `RAG_DEBUG=1`.
+
+The log currently contains startup diagnostics but no request exception from the health check. fileciteturn122file0L5-L25
+
+The user also reports that opening `127.0.0.1:11434` in the browser returns the Ollama running response.
+
+### Confirmed source defect
+
+The old `/api/health` implementation conflated two different states:
+
+1. Ollama server reachability;
+2. embedding-model availability.
+
+The code first received HTTP 200 from Ollama and set `ollama_ok=True`, but then performed `/api/embed`. Any model error, missing model, or embedding timeout changed `ollama_ok=False`.
+
+The frontend displayed only `health.ollama`, so a model-level failure appeared as **Ollama offline/KO**, even when the Ollama server itself was reachable.
+
+### Corrected contract
+
+The health API now exposes separate fields:
+
+- `ollama`: Ollama server is reachable;
+- `ollama_detail`: server status;
+- `ollamaEmbedding`: embedding-model check result;
+- `ollamaEmbeddingDetail`: exact embedding-model diagnostic.
+
+The server health check remains a short 2-second HTTP reachability test.
+
+The embedding check now has a 10-second timeout because model loading can legitimately take longer than a simple server-connectivity check.
+
+### Corrected frontend flow
+
+The Header now renders:
+
+- `Online` when the Ollama server is reachable;
+- `Online / Model Error` when the server is reachable but the configured embedding model failed;
+- `Offline` only when the Ollama server itself is unreachable.
+
+The tooltip distinguishes server availability from model availability.
+
+### Diagnostic improvement
+
+When the embedding check fails with an exception, `debug_exception()` records:
+- route;
+- phase;
+- Ollama URL;
+- exception type/message;
+- traceback;
+- runtime/environment snapshot.
+
+This gives the next runtime test enough evidence to distinguish:
+`server unavailable` vs `model unavailable` vs `model load timeout`.
+
+### Current status
+
+- Ollama WSL process startup: **USER-OBSERVED RUNNING**.
+- Ollama HTTP server reachability from browser: **USER-OBSERVED OK**.
+- Backend health semantics: **FIXED**.
+- Embedding model availability: **OPEN / must be verified by `/api/health`**.
+- Current API failure root causes: **OPEN**.
+- Debug log mechanism: **FIXED AND SOURCE-VERIFIED**.
+- Full E2E API flow: **OPEN**.
+
+**NEXT EXACT TEST:** open `http://localhost:8000/api/health` and inspect `ollama`, `ollama_detail`, `ollamaEmbedding`, and `ollamaEmbeddingDetail`. Then reproduce one failing API request.
+
+**STOP CONDITION:** do not classify an Ollama server outage from an embedding-model failure alone.
