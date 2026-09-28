@@ -1,25 +1,27 @@
-"""Debug logging robusto per il backend RAG.
+"""Debug logging indipendente dalla configurazione di Uvicorn.
 
-Quando il debug è attivo, registra gli errori con traceback completo e un
-snapshot selettivo dell'ambiente/runtime nel file log_debug.log alla radice
-del progetto. I valori sensibili vengono sempre redatti.
+Il file viene scritto direttamente dal processo applicativo. Questo evita che
+Uvicorn/reload possa rimuovere o riconfigurare un handler e lasciare il log vuoto.
 """
 
 from __future__ import annotations
 
 import json
-import logging
 import os
 import platform
 import sys
+import threading
+import traceback
 from importlib import metadata
-from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any, Mapping
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEBUG_LOG_PATH = PROJECT_ROOT / "log_debug.log"
+_MAX_LOG_BYTES = 10 * 1024 * 1024
+_BACKUP_COUNT = 3
+_WRITE_LOCK = threading.Lock()
 
 _TRUTHY = {"1", "true", "yes", "on", "debug"}
 _SENSITIVE_PARTS = (
@@ -74,56 +76,8 @@ _ENV_PREFIXES = (
 
 
 def debug_enabled() -> bool:
-    """True quando il debug applicativo è richiesto esplicitamente o da Uvicorn."""
-    raw = os.getenv("RAG_DEBUG", "").strip().lower()
-    if raw in _TRUTHY:
-        return True
-    # Uvicorn configura normalmente i propri logger prima di importare l'app.
-    # Questo permette di attivare il file anche con log-level debug.
-    try:
-        return logging.getLogger("uvicorn.error").isEnabledFor(logging.DEBUG)
-    except Exception:
-        return False
-
-
-def configure_debug_logging() -> bool:
-    """Configura una sola volta un handler rotante sul root logger."""
-    if not debug_enabled():
-        return False
-
-    try:
-        DEBUG_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        root = logging.getLogger()
-        root.setLevel(logging.DEBUG)
-
-        for handler in root.handlers:
-            if getattr(handler, "_rag_debug_file_handler", False):
-                return True
-
-        handler = RotatingFileHandler(
-            DEBUG_LOG_PATH,
-            maxBytes=10 * 1024 * 1024,
-            backupCount=3,
-            encoding="utf-8",
-        )
-        handler._rag_debug_file_handler = True  # type: ignore[attr-defined]
-        handler.setLevel(logging.DEBUG)
-        handler.setFormatter(
-            logging.Formatter(
-                "%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-                "%Y-%m-%d %H:%M:%S",
-            )
-        )
-        root.addHandler(handler)
-
-        logging.getLogger("rag.debug").info(
-            "Debug logging attivo; file=%s",
-            DEBUG_LOG_PATH,
-        )
-        return True
-    except Exception:
-        # Il logging di debug non deve mai impedire l'avvio dell'app.
-        return False
+    """Debug applicativo attivo solo quando RAG_DEBUG è esplicitamente true."""
+    return os.getenv("RAG_DEBUG", "").strip().lower() in _TRUTHY
 
 
 def _redact(key: str, value: Any) -> Any:
@@ -143,10 +97,7 @@ def _redact(key: str, value: Any) -> Any:
 def _environment_snapshot() -> dict[str, Any]:
     env: dict[str, Any] = {}
     for key, value in sorted(os.environ.items()):
-        if (
-            key in _ENV_EXACT
-            or any(key.startswith(prefix) for prefix in _ENV_PREFIXES)
-        ):
+        if key in _ENV_EXACT or any(key.startswith(prefix) for prefix in _ENV_PREFIXES):
             env[key] = _redact(key, value)
     return env
 
@@ -195,25 +146,28 @@ def _runtime_snapshot() -> dict[str, Any]:
 def _request_snapshot(request: Any | None) -> dict[str, Any] | None:
     if request is None:
         return None
-
     try:
-        query_params = {
+        safe_query = {
             str(key): _redact(key, value)
             for key, value in request.query_params.multi_items()
         }
         safe_headers = {}
-        for key in ("content-type", "content-length", "user-agent", "origin", "referer"):
+        for key in (
+            "content-type",
+            "content-length",
+            "user-agent",
+            "origin",
+            "referer",
+        ):
             value = request.headers.get(key)
             if value is not None:
                 safe_headers[key] = _redact(key, value)
-
-        client = request.client
         return {
             "method": request.method,
             "path": request.url.path,
-            "query": query_params,
+            "query": safe_query,
             "headers": safe_headers,
-            "client": client.host if client else None,
+            "client": request.client.host if request.client else None,
         }
     except Exception as exc:
         return {"snapshotError": f"{type(exc).__name__}: {exc}"}
@@ -225,23 +179,78 @@ def _sanitize_mapping(value: Mapping[str, Any] | None) -> dict[str, Any]:
     return {str(key): _redact(str(key), item) for key, item in value.items()}
 
 
+def _rotate_if_needed() -> None:
+    try:
+        if not DEBUG_LOG_PATH.exists() or DEBUG_LOG_PATH.stat().st_size < _MAX_LOG_BYTES:
+            return
+
+        oldest = DEBUG_LOG_PATH.with_name(f"{DEBUG_LOG_PATH.name}.{_BACKUP_COUNT}")
+        oldest.unlink(missing_ok=True)
+
+        for index in range(_BACKUP_COUNT - 1, 0, -1):
+            src = DEBUG_LOG_PATH.with_name(f"{DEBUG_LOG_PATH.name}.{index}")
+            dst = DEBUG_LOG_PATH.with_name(f"{DEBUG_LOG_PATH.name}.{index + 1}")
+            if src.exists():
+                src.replace(dst)
+
+        DEBUG_LOG_PATH.replace(DEBUG_LOG_PATH.with_name(f"{DEBUG_LOG_PATH.name}.1"))
+    except Exception:
+        # La rotazione non deve impedire la scrittura del nuovo evento.
+        pass
+
+
+def _write_event(payload: dict[str, Any]) -> None:
+    """Scrive direttamente sul file: non dipende dagli handler di logging."""
+    if not debug_enabled():
+        return
+
+    try:
+        DEBUG_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        line = (
+            "\n" + "=" * 100 + "\n"
+            + json.dumps(payload, ensure_ascii=False, indent=2, default=str)
+            + "\n"
+        )
+        with _WRITE_LOCK:
+            _rotate_if_needed()
+            with DEBUG_LOG_PATH.open("a", encoding="utf-8", errors="replace") as handle:
+                handle.write(line)
+                handle.flush()
+                os.fsync(handle.fileno())
+    except Exception:
+        # Il debug logger è sempre fail-open.
+        pass
+
+
+def configure_debug_logging() -> bool:
+    """Crea subito il file e registra un marker di avvio del processo."""
+    if not debug_enabled():
+        return False
+
+    _write_event(
+        {
+            "event": "debug_startup",
+            "message": "Debug logging attivo",
+            "runtime": _runtime_snapshot(),
+        }
+    )
+    return True
+
+
 def debug_message(
     message: str,
     *,
     extra: Mapping[str, Any] | None = None,
 ) -> None:
-    """Scrive un evento diagnostico senza richiedere un'eccezione."""
-    if not configure_debug_logging():
+    if not debug_enabled():
         return
-    payload = {
-        "event": "debug",
-        "message": message,
-        "extra": _sanitize_mapping(extra),
-        "runtime": _runtime_snapshot(),
-    }
-    logging.getLogger("rag.debug").debug(
-        "DEBUG_EVENT\n%s",
-        json.dumps(payload, ensure_ascii=False, indent=2, default=str),
+    _write_event(
+        {
+            "event": "debug",
+            "message": message,
+            "extra": _sanitize_mapping(extra),
+            "runtime": _runtime_snapshot(),
+        }
     )
 
 
@@ -252,24 +261,20 @@ def debug_exception(
     request: Any | None = None,
     extra: Mapping[str, Any] | None = None,
 ) -> None:
-    """Scrive traceback completo + request/runtime/env in modo redatto."""
-    if not configure_debug_logging():
+    """Registra sempre traceback completo + contesto runtime redatto."""
+    if not debug_enabled():
         return
 
     payload = {
         "event": "exception",
         "message": message,
-        "exception": {
-            "type": type(exc).__name__,
-            "message": str(exc),
-        },
+        "exceptionType": type(exc).__name__,
+        "exceptionMessage": str(exc),
+        "traceback": "".join(
+            traceback.format_exception(type(exc), exc, exc.__traceback__)
+        ),
         "request": _request_snapshot(request),
         "extra": _sanitize_mapping(extra),
         "runtime": _runtime_snapshot(),
     }
-
-    logging.getLogger("rag.debug").error(
-        "DEBUG_EXCEPTION\n%s",
-        json.dumps(payload, ensure_ascii=False, indent=2, default=str),
-        exc_info=(type(exc), exc, exc.__traceback__),
-    )
+    _write_event(payload)
