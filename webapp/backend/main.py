@@ -346,36 +346,74 @@ def read_root():
 def get_health():
     ollama_ok = False
     ollama_detail = "Non raggiungibile"
+    ollama_embedding_ok: Optional[bool] = None
+    ollama_embedding_detail = "Non verificato"
     startup_error = RAG_IMPORT_ERROR
+
     try:
         import requests
-        r = requests.get(config.get("ollamaUrl", "http://localhost:11434"), timeout=2)
+        ollama_url = config.get("ollamaUrl", "http://localhost:11434").rstrip("/")
+        r = requests.get(ollama_url, timeout=2)
+
         if r.status_code == 200:
+            # Lo stato "ollama" rappresenta esclusivamente la disponibilità
+            # del server Ollama. Un modello mancante/non pronto non rende
+            # irraggiungibile il servizio.
             ollama_ok = True
-            ollama_detail = "OK"
-            # Verifica modello embedding
+            ollama_detail = "Server Ollama raggiungibile"
+
             try:
                 try:
                     active_info = db_manager.get_active_info()
                 except Exception:
                     active_info = {}
-                emb_model = active_info.get("embeddingModel") or config.get("embeddingModel", "qwen3-embedding:0.6b")
-                # Chiamata minima a /api/embed per verificare modello e connessione
-                emb_res = requests.post(
-                    f"{config.get('ollamaUrl', 'http://localhost:11434').rstrip('/')}/api/embed",
-                    json={"model": emb_model, "input": "health check"},
-                    timeout=2
+
+                emb_model = active_info.get("embeddingModel") or config.get(
+                    "embeddingModel", "qwen3-embedding:0.6b"
                 )
-                if emb_res.status_code != 200:
-                    ollama_ok = False
-                    ollama_detail = f"Modello embedding {emb_model} non disponibile ({emb_res.status_code})"
+                emb_res = requests.post(
+                    f"{ollama_url}/api/embed",
+                    json={"model": emb_model, "input": "health check"},
+                    timeout=10,
+                )
+                response_detail = emb_res.text[:500]
+                if emb_res.status_code == 200:
+                    ollama_embedding_ok = True
+                    ollama_embedding_detail = f"Modello embedding {emb_model} disponibile"
+                else:
+                    ollama_embedding_ok = False
+                    ollama_embedding_detail = (
+                        f"Modello embedding {emb_model} non disponibile "
+                        f"({emb_res.status_code}): {response_detail}"
+                    )
             except Exception as e:
-                ollama_ok = False
-                ollama_detail = f"Errore verifica embedding: {str(e)}"
+                ollama_embedding_ok = False
+                ollama_embedding_detail = (
+                    f"Verifica embedding fallita: {type(e).__name__}: {e}"
+                )
+                debug_exception(
+                    "Health check del modello embedding Ollama fallito",
+                    e,
+                    extra={
+                        "route": "/api/health",
+                        "phase": "ollama-embedding-health",
+                        "ollamaUrl": ollama_url,
+                    },
+                )
         else:
-            ollama_detail = f"Risposta HTTP {r.status_code}"
+            ollama_detail = (
+                f"Server Ollama ha risposto HTTP {r.status_code}: {r.text[:500]}"
+            )
+            ollama_embedding_ok = False
     except Exception as e:
-        ollama_detail = f"Errore connessione: {str(e)}"
+        ollama_detail = f"Errore connessione Ollama: {type(e).__name__}: {e}"
+        ollama_embedding_ok = False
+        ollama_embedding_detail = "Verifica non eseguita: server non raggiungibile"
+        debug_exception(
+            "Health check del server Ollama fallito",
+            e,
+            extra={"route": "/api/health", "phase": "ollama-server-health"},
+        )
 
     database_import_error = RAG_IMPORT_ERRORS.get("database")
     lancedb_ok = database_import_error is None
@@ -398,6 +436,8 @@ def get_health():
         "lancedb_detail": lancedb_detail,
         "ollama": ollama_ok,
         "ollama_detail": ollama_detail,
+        "ollamaEmbedding": ollama_embedding_ok,
+        "ollamaEmbeddingDetail": ollama_embedding_detail,
         "startup_error": startup_error,
         "component_errors": dict(RAG_IMPORT_ERRORS),
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
