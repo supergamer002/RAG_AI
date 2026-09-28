@@ -533,3 +533,84 @@ Required verification after the next startup:
 **NEXT EXACT ACTION:** run the updated `start.bat`, reproduce the first failing API call, and use the first exception/traceback in `log_debug.log` as the root-cause input.
 
 **STOP CONDITION:** do not patch individual endpoints solely from the browser error message. The next fix should follow the first concrete traceback and its function-flow branch.
+
+
+## 16. Applied fixes — Round 7 / Debug log reliability correction
+
+### User runtime finding
+
+After Round 6, the user reported that `log_debug.log` remained empty despite API failures.
+
+### Root cause of the diagnostic mechanism
+
+The previous implementation wrote through the Python logging subsystem. Under Uvicorn/reload, logging configuration can be re-applied after the application module installs its handlers. Therefore the application could remain healthy while the custom file handler was absent or disconnected from the root logger.
+
+This made the diagnostic mechanism itself insufficiently deterministic.
+
+### Corrected architecture
+
+`webapp/backend/debug_logging.py` no longer depends on Uvicorn/Python logging handlers to persist the debug file.
+
+The write path is now:
+
+`exception/event → debug_exception()/debug_message() → _write_event() → direct file append → flush → fsync`
+
+The debug logger creates:
+
+`<project root>/log_debug.log`
+
+directly from the module location, independently of the current working directory.
+
+### Startup proof
+
+When `RAG_DEBUG=1` is present, `configure_debug_logging()` immediately writes a `debug_startup` event.
+
+Therefore the next startup provides a binary diagnostic:
+
+- `log_debug.log` created/contains `debug_startup` → debug flag reached the Python process and file writing works;
+- no file/no marker → the problem is in launcher/environment/path before request handling.
+
+### Exception proof
+
+`debug_exception()` now serializes the traceback explicitly with:
+
+`traceback.format_exception(...)`
+
+and stores it in the JSON event.
+
+It no longer relies on `exc_info` formatting by a third-party logger.
+
+### Reliability controls
+
+- direct append with UTF-8 and replacement for malformed output;
+- explicit `flush()`;
+- explicit `os.fsync()`;
+- per-process write lock;
+- bounded log rotation at 10 MB with three backups;
+- rotation failures are non-fatal;
+- write failures are non-fatal;
+- secret/proxy redaction remains active;
+- request body remains excluded.
+
+### Debug mode contract
+
+The application debug file is now controlled by exactly one explicit runtime switch:
+
+`RAG_DEBUG=1`
+
+The launcher already sets this variable before starting Uvicorn in WSL.
+
+`--log-level debug` remains useful for Uvicorn console diagnostics, but it is no longer required for writing `log_debug.log`.
+
+### Current audit state
+
+- Debug file generation mechanism: **REPLACED WITH DIRECT WRITER**.
+- Startup marker: **APPLIED**.
+- Full traceback serialization: **APPLIED**.
+- Runtime/environment snapshot: **APPLIED**.
+- Current API root causes: **OPEN**.
+- E2E API verification: **OPEN**.
+
+**NEXT EXACT TEST:** start the current `start.bat`. Before reproducing any API request, verify that the project-root `log_debug.log` exists and contains a `debug_startup` event. Then reproduce one failing request and inspect the first `exception` event.
+
+**STOP CONDITION:** if the startup marker is absent, investigate the WSL launcher/environment variable propagation before changing API code.
