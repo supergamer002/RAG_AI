@@ -1,7 +1,5 @@
-import { apiFetch, apiJson, apiUrl, getApiToken, setApiToken } from '../api';
+import { apiFetch, formatApiError } from '../api';
 import React, { useState } from 'react';
-
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
 interface IngestModalProps {
   isOpen: boolean;
@@ -59,24 +57,26 @@ export const IngestModal: React.FC<IngestModalProps> = ({
         setStep('Elaborazione in background in corso...');
 
         let pollErrors = 0;
-        const startedAt = Date.now();
-        const maxClientWaitMs = 30 * 60 * 1000;
+        let stopped = false;
         const poll = async () => {
-          if (Date.now() - startedAt > maxClientWaitMs) {
-            setIsProcessing(false);
-            onShowToast("L'ingestion sta impiegando troppo tempo. Controlla lo stato dal backend.", true);
-            return;
-          }
+          if (stopped) return;
           try {
             const res = await apiFetch(`/api/ingest/status/${jobId}`);
             const statusData = await res.json().catch(() => null);
             if (!res.ok) throw new Error(statusData?.detail || `HTTP ${res.status}`);
             pollErrors = 0;
-            const processed = statusData.filesProcessed || 0;
-            const total = statusData.filesTotal || fileObjects.length;
+
+            const processed = Number(statusData.filesProcessed || 0);
+            const total = Number(statusData.filesTotal || fileObjects.length || 1);
             const current = statusData.currentFile ? ` — ${statusData.currentFile}` : '';
-            setStep(`${processed}/${total} file elaborati${current}`);
+            const stage = statusData.stage ? ` · ${statusData.stage}` : '';
+            const progress = Number.isFinite(Number(statusData.progressPercent))
+              ? Math.max(0, Math.min(100, Number(statusData.progressPercent)))
+              : Math.round((processed / total) * 100);
+            setStep(`${processed}/${total} file · ${progress.toFixed(0)}%${current}${stage}`);
+
             if (statusData.status === 'completed') {
+              stopped = true;
               setIsProcessing(false);
               const created = statusData.chunksCreated || 0;
               const ingestedName = fileObjects.length === 1 ? fileObjects[0].name : selectionLabel || `${fileObjects.length} file`;
@@ -87,21 +87,26 @@ export const IngestModal: React.FC<IngestModalProps> = ({
               onClose();
               return;
             }
-            if (statusData.status === 'failed') {
+
+            if (statusData.status === 'failed' || statusData.status === 'interrupted') {
+              stopped = true;
               setIsProcessing(false);
               const details = statusData.errors?.slice?.(0, 3).map((e: any) => `${e.file}: ${e.error}`).join(' | ');
-              onShowToast(`Errore durante l'ingest: ${statusData.error || details || 'errore sconosciuto'}`, true);
+              const reason = statusData.error || details || 'errore sconosciuto';
+              onShowToast(
+                statusData.status === 'interrupted'
+                  ? `Ingestion interrotta dal riavvio del backend: ${reason}`
+                  : `Errore durante l'ingest: ${reason}`,
+                true,
+              );
               return;
             }
+
             window.setTimeout(poll, 1000);
           } catch (err) {
             pollErrors += 1;
-            if (pollErrors >= 5) {
-              setIsProcessing(false);
-              onShowToast(`Errore nel controllo dell'ingest: ${err instanceof Error ? err.message : 'errore sconosciuto'}`, true);
-              return;
-            }
-            window.setTimeout(poll, Math.min(5000, 1000 * pollErrors));
+            setStep(`Monitoraggio temporaneamente non disponibile (tentativo ${pollErrors})`);
+            window.setTimeout(poll, Math.min(10000, 1000 * 2 ** Math.min(pollErrors - 1, 3)));
           }
         };
         void poll();
@@ -256,7 +261,10 @@ export const IngestModal: React.FC<IngestModalProps> = ({
                 <span>{step}</span>
               </div>
               <div className="w-full h-1.5 bg-[#171b26] rounded-full overflow-hidden">
-                <div className="w-2/3 h-full bg-[#4cd7f6] animate-pulse rounded-full" />
+                <div
+                  className="h-full bg-[#4cd7f6] rounded-full transition-[width] duration-500"
+                  style={{ width: `${Math.max(0, Math.min(100, Number(step.match(/(\\d+)%/)?.[1] || 0)))}%` }}
+                />
               </div>
             </div>
           )}
