@@ -1,4 +1,4 @@
-import { apiFetch, apiJson, apiUrl, getApiToken, setApiToken } from '../api';
+import { apiJson, formatApiError } from '../api';
 import React, { useEffect, useState } from 'react';
 import { EvalMetric } from '../types';
 
@@ -65,7 +65,7 @@ export const EvaluationsView: React.FC<EvaluationsViewProps> = ({
           if (pollErrors >= 5) {
             setIsRunningEval(false);
             onShowToast(
-              `Errore nel monitoraggio benchmark: ${err instanceof Error ? err.message : 'errore sconosciuto'}`,
+              formatApiError(err, 'Monitoraggio benchmark'),
               true
             );
             return;
@@ -77,7 +77,7 @@ export const EvaluationsView: React.FC<EvaluationsViewProps> = ({
       await poll();
     } catch (err) {
       setIsRunningEval(false);
-      onShowToast(`Impossibile avviare il benchmark: ${err instanceof Error ? err.message : 'errore sconosciuto'}`, true);
+      onShowToast(formatApiError(err, 'Avvio benchmark'), true);
     }
   };
 
