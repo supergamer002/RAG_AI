@@ -1,4 +1,4 @@
-import { apiFetch, apiJson, apiUrl, getApiToken, setApiToken } from '../api';
+import { apiFetch, apiJson, formatApiError, getApiToken } from '../api';
 import React, { useEffect, useState } from 'react';
 import { TelemetryLog } from '../types';
 
@@ -20,6 +20,7 @@ export const PipelineTelemetryView: React.FC<PipelineTelemetryViewProps> = ({
   const [levelFilter, setLevelFilter] = useState<string>('all');
   const [isPaused, setIsPaused] = useState(false);
   const [streamStatus, setStreamStatus] = useState<'connecting' | 'connected' | 'paused' | 'error'>('connecting');
+  const [streamError, setStreamError] = useState<string | null>(null);
   const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
   useEffect(() => {
@@ -32,6 +33,7 @@ export const PipelineTelemetryView: React.FC<PipelineTelemetryViewProps> = ({
     const streamUrl = `${API_BASE_URL}/api/telemetry/stream${token ? `?token=${encodeURIComponent(token)}` : ''}`;
     const source = new EventSource(streamUrl);
     setStreamStatus('connecting');
+    setStreamError(null);
 
     const handleTelemetry = (event: MessageEvent<string>) => {
       try {
@@ -42,6 +44,7 @@ export const PipelineTelemetryView: React.FC<PipelineTelemetryViewProps> = ({
         }
       } catch {
         setStreamStatus('error');
+        setStreamError('Evento SSE non valido ricevuto dal backend.');
       }
     };
 
@@ -49,6 +52,7 @@ export const PipelineTelemetryView: React.FC<PipelineTelemetryViewProps> = ({
     source.onopen = () => setStreamStatus('connected');
     source.onerror = () => {
       setStreamStatus('error');
+      setStreamError(`Stream SSE non raggiungibile: ${streamUrl}`);
       source.close();
     };
 
@@ -93,7 +97,7 @@ export const PipelineTelemetryView: React.FC<PipelineTelemetryViewProps> = ({
         onShowToast('Buffer telemetria backend svuotato con successo.');
       })
       .catch((err) => {
-        onShowToast(`Impossibile svuotare il buffer backend: ${err instanceof Error ? err.message : 'errore sconosciuto'}`, true);
+        onShowToast(formatApiError(err, 'Svuotamento telemetria'), true);
       });
   };
 
@@ -179,7 +183,7 @@ export const PipelineTelemetryView: React.FC<PipelineTelemetryViewProps> = ({
           }`}>
             {streamStatus === 'connected' ? 'SSE ONLINE' : streamStatus === 'paused' ? 'SSE PAUSED' : streamStatus === 'connecting' ? 'SSE CONNECTING' : 'SSE ERROR'}
           </div>
-          <span className="font-mono text-[11px] text-[#bcc9cd]">Stream telemetria backend</span>
+          <span className="font-mono text-[11px] text-[#bcc9cd]" title={streamError || undefined}>{streamError || 'Stream telemetria backend'}</span>
         </div>
       </div>
 
