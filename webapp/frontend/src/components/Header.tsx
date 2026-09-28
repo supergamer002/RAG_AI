@@ -162,11 +162,14 @@ export const Header: React.FC<HeaderProps> = ({
               <span className="material-symbols-outlined text-[18px]">terminal</span>
             </button>
             <div
-              className="w-8 h-8 rounded-lg bg-[#262a35] hover:bg-[#353944] text-[#bcc9cd] hover:text-[#dfe2f1] flex items-center justify-center transition-colors border border-[#3d494c]/30 cursor-pointer relative"
-              title={healthError || "Notifiche di Sistema"}
+              className="w-8 h-8 rounded-lg bg-[#262a35] text-[#bcc9cd] flex items-center justify-center border border-[#3d494c]/30 relative"
+              title={healthError || "Stato diagnostico runtime"}
+              aria-label={healthError || "Stato diagnostico runtime"}
             >
-              <span className="material-symbols-outlined text-[18px]">notifications</span>
-              <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-[#4cd7f6]" />
+              <span className="material-symbols-outlined text-[18px]">notifications_none</span>
+              {healthError && (
+                <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-[#ffb4ab]" />
+              )}
             </div>
           </div>
 
