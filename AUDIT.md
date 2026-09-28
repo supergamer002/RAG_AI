@@ -614,3 +614,50 @@ The launcher already sets this variable before starting Uvicorn in WSL.
 **NEXT EXACT TEST:** start the current `start.bat`. Before reproducing any API request, verify that the project-root `log_debug.log` exists and contains a `debug_startup` event. Then reproduce one failing request and inspect the first `exception` event.
 
 **STOP CONDITION:** if the startup marker is absent, investigate the WSL launcher/environment variable propagation before changing API code.
+
+
+## 17. Applied fix — Round 8 / Ollama WSL launcher
+
+### User runtime finding
+
+The debug backend launcher starts through WSL, but the Ollama server did not start reliably.
+
+### Failure path
+
+The previous launcher used:
+
+`start → cmd.exe → wsl.exe → ollama serve`
+
+This introduced an unnecessary Windows command-shell layer around a long-running Linux process.
+
+### Corrected flow
+
+The launcher now uses:
+
+`start → wsl.exe → bash -lc → Ollama`
+
+with a process guard:
+
+`pgrep -x ollama`
+
+Branch A — Ollama already running:
+
+`pgrep → true → no second server → terminal reports already active`
+
+Branch B — Ollama not running:
+
+`pgrep → false → exec ollama serve`
+
+Using `exec` makes the WSL command process become the Ollama server process instead of leaving an extra shell process supervising it.
+
+### Stability objective
+
+This removes the previous `cmd /k` wrapper from the Ollama path and avoids accidental duplicate Ollama instances on repeated launcher executions.
+
+### Current verification status
+
+Source/launcher fix applied, but actual Ollama process startup has not yet been runtime-verified in the user's WSL environment.
+
+**NEXT EXACT TEST:** run `start.bat` and inspect the dedicated Ollama WSL terminal. It must show either `Ollama server gia attivo.` or the normal Ollama server startup output.
+
+**STOP CONDITION:** if the WSL terminal still exits immediately, capture its exact console error. The next fix must target that concrete WSL/Ollama error rather than changing FastAPI code.
