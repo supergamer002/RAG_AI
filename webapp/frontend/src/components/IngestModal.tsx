@@ -82,8 +82,10 @@ export const IngestModal: React.FC<IngestModalProps> = ({
               const ingestedName = fileObjects.length === 1 ? fileObjects[0].name : selectionLabel || `${fileObjects.length} file`;
               onIngestSuccess(ingestedName, created);
               const failed = statusData.filesFailed || 0;
+              const skipped = statusData.filesSkipped || 0;
               const suffix = failed ? ` (${failed} file con errore)` : '';
-              onShowToast(`${ingestedName} indicizzato con successo (${created} chunks)${suffix}!`, Boolean(failed));
+              const skippedSuffix = skipped ? ` (${skipped} file non supportati ignorati)` : '';
+              onShowToast(`${ingestedName} indicizzato con successo (${created} chunks)${suffix}${skippedSuffix}!`, Boolean(failed));
               onClose();
               return;
             }
