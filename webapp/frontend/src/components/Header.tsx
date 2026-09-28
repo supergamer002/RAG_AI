@@ -26,10 +26,11 @@ export const Header: React.FC<HeaderProps> = ({
   const [healthError, setHealthError] = useState<string | null>(null);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [notifications, setNotifications] = useState<Array<{ id: string; title: string; message: string; time: string; unread: boolean }>>([]);
-  const [health, setHealth] = useState<{ fastapi: boolean; lancedb: boolean; ollama: boolean }>({
+  const [health, setHealth] = useState<{ fastapi: boolean; lancedb: boolean; ollama: boolean; ollamaEmbedding: boolean | null }>({
     fastapi: true,
     lancedb: true,
     ollama: false,
+    ollamaEmbedding: null,
   });
 
   useEffect(() => {
@@ -42,6 +43,10 @@ export const Header: React.FC<HeaderProps> = ({
               fastapi: !!data.fastapi,
               lancedb: !!data.lancedb,
               ollama: !!data.ollama,
+              ollamaEmbedding:
+                typeof data.ollamaEmbedding === 'boolean'
+                  ? data.ollamaEmbedding
+                  : null,
             };
             setHealthError(null);
             setHealth((previous) => {
@@ -84,7 +89,7 @@ export const Header: React.FC<HeaderProps> = ({
                 unread: true,
               }, ...current].slice(0, 20));
             }
-            return { fastapi: false, lancedb: false, ollama: false };
+            return { fastapi: false, lancedb: false, ollama: false, ollamaEmbedding: null };
           });
         });
     };
@@ -130,11 +135,26 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
 
           {/* Ollama */}
-          <div className="flex items-center gap-1.5 bg-[#171b26] px-2.5 py-1.5 rounded-lg border border-[#262a35] shrink-0">
+          <div
+            className="flex items-center gap-1.5 bg-[#171b26] px-2.5 py-1.5 rounded-lg border border-[#262a35] shrink-0"
+            title={
+              health.ollama
+                ? health.ollamaEmbedding === false
+                  ? 'Server Ollama online, ma modello embedding non disponibile'
+                  : health.ollamaEmbedding === true
+                    ? 'Server Ollama online e modello embedding disponibile'
+                    : 'Server Ollama online; modello embedding non verificato'
+                : 'Server Ollama non raggiungibile'
+            }
+          >
             <span className={`w-1.5 h-1.5 rounded-full ${health.ollama ? 'bg-[#d0bcff]' : 'bg-[#ffb4ab]'}`} />
             <span className="font-mono text-[11px] text-[#bcc9cd]">Ollama:</span>
             <span className={`font-mono text-[11px] font-medium ${health.ollama ? 'text-[#d0bcff]' : 'text-[#ffb4ab]'}`}>
-              {health.ollama ? 'Ready' : 'Standby'}
+              {health.ollama
+                ? health.ollamaEmbedding === false
+                  ? 'Online / Model Error'
+                  : 'Online'
+                : 'Offline'}
             </span>
           </div>
 
