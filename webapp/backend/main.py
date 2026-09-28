@@ -415,6 +415,18 @@ def get_health():
             extra={"route": "/api/health", "phase": "ollama-server-health"},
         )
 
+    cross_encoder_state = (
+        reranker.stato()
+        if reranker is not None and hasattr(reranker, "stato")
+        else {
+            "status": "unavailable",
+            "label": "Unavailable",
+            "model": config.get("crossEncoderModel", "BAAI/bge-reranker-v2-m3"),
+            "loaded": False,
+            "error": "CrossEncoder non inizializzato",
+        }
+    )
+
     database_import_error = RAG_IMPORT_ERRORS.get("database")
     lancedb_ok = database_import_error is None
     lancedb_detail = "OK" if lancedb_ok else f"Dipendenza database non caricabile: {database_import_error}"
@@ -438,6 +450,7 @@ def get_health():
         "ollama_detail": ollama_detail,
         "ollamaEmbedding": ollama_embedding_ok,
         "ollamaEmbeddingDetail": ollama_embedding_detail,
+        "crossEncoder": cross_encoder_state,
         "startup_error": startup_error,
         "component_errors": dict(RAG_IMPORT_ERRORS),
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
