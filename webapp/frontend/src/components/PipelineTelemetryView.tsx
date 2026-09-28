@@ -26,48 +26,100 @@ export const PipelineTelemetryView: React.FC<PipelineTelemetryViewProps> = ({
   const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
   useEffect(() => {
+    let source: EventSource | null = null;
+    let stopped = false;
+
+    const closeSource = () => {
+      if (source) {
+        source.close();
+        source = null;
+      }
+    };
+
+    const scheduleReconnect = () => {
+      if (stopped || isPaused || reconnectTimerRef.current !== null) return;
+      reconnectTimerRef.current = window.setTimeout(() => {
+        reconnectTimerRef.current = null;
+        connectStream();
+      }, reconnectDelayRef.current);
+      reconnectDelayRef.current = Math.min(reconnectDelayRef.current * 2, 30000);
+    };
+
+    const connectStream = async () => {
+      if (stopped || isPaused) return;
+
+      closeSource();
+      setStreamStatus('connecting');
+      setStreamError(null);
+
+      try {
+        const token = getApiToken();
+        let streamUrl = `${API_BASE_URL}/api/telemetry/stream`;
+
+        if (token) {
+          const response = await apiJson<{ ticket: string }>(`${API_BASE_URL}/api/telemetry/stream-ticket`, {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          });
+          streamUrl += `?ticket=${encodeURIComponent(response.ticket)}`;
+        }
+
+        if (stopped || isPaused) return;
+
+        source = new EventSource(streamUrl);
+
+        const handleTelemetry = (event: MessageEvent<string>) => {
+          try {
+            const nextLogs = JSON.parse(event.data);
+            if (Array.isArray(nextLogs)) {
+              onLogsUpdate(nextLogs);
+              setStreamStatus('connected');
+              reconnectDelayRef.current = 1000;
+            }
+          } catch {
+            setStreamStatus('error');
+            setStreamError('Evento SSE non valido ricevuto dal backend.');
+          }
+        };
+
+        source.addEventListener('telemetry', handleTelemetry as EventListener);
+        source.onopen = () => {
+          setStreamStatus('connected');
+          reconnectDelayRef.current = 1000;
+        };
+        source.onerror = () => {
+          setStreamStatus('error');
+          setStreamError('Stream SSE non raggiungibile; nuovo tentativo automatico.');
+          closeSource();
+          scheduleReconnect();
+        };
+      } catch (err) {
+        setStreamStatus('error');
+        setStreamError(formatApiError(err, 'Connessione stream SSE'));
+        scheduleReconnect();
+      }
+    };
+
     if (isPaused) {
       setStreamStatus('paused');
-      return;
+      return () => {
+        stopped = true;
+        closeSource();
+        if (reconnectTimerRef.current !== null) {
+          window.clearTimeout(reconnectTimerRef.current);
+          reconnectTimerRef.current = null;
+        }
+      };
     }
 
-    const token = getApiToken();
-    const streamUrl = `${API_BASE_URL}/api/telemetry/stream${token ? `?token=${encodeURIComponent(token)}` : ''}`;
-    const source = new EventSource(streamUrl);
-    setStreamStatus('connecting');
-    setStreamError(null);
     reconnectDelayRef.current = 1000;
-
-    const handleTelemetry = (event: MessageEvent<string>) => {
-      try {
-        const nextLogs = JSON.parse(event.data);
-        if (Array.isArray(nextLogs)) {
-          onLogsUpdate(nextLogs);
-          setStreamStatus('connected');
-        }
-      } catch {
-        setStreamStatus('error');
-        setStreamError('Evento SSE non valido ricevuto dal backend.');
-      }
-    };
-
-    source.addEventListener('telemetry', handleTelemetry as EventListener);
-    source.onopen = () => setStreamStatus('connected');
-    source.onerror = () => {
-      setStreamStatus('error');
-      setStreamError(`Stream SSE non raggiungibile: ${streamUrl}`);
-      source.close();
-      if (!isPaused) {
-        reconnectTimerRef.current = window.setTimeout(() => {
-          reconnectTimerRef.current = null;
-          connectStream();
-        }, reconnectDelayRef.current);
-        reconnectDelayRef.current = Math.min(reconnectDelayRef.current * 2, 30000);
-      }
-    };
+    void connectStream();
 
     return () => {
-      source.close();
+      stopped = true;
+      closeSource();
       if (reconnectTimerRef.current !== null) {
         window.clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = null;
