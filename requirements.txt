@@ -2,8 +2,12 @@ fastapi[standard]
 uvicorn[standard]
 numpy
 scikit-learn
-lancedb
+lancedb==0.39.0
+pyarrow>=14,<26
+requests
 python-multipart
 pydantic
+pypdf
+docling>=2.59,<3
 FlagEmbedding
 torch
