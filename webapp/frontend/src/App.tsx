@@ -1,4 +1,4 @@
-import { apiFetch, apiJson, apiUrl, getApiToken, setApiToken } from './api';
+import { apiFetch, formatApiError, getApiToken, setApiToken } from './api';
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -41,14 +41,14 @@ export default function App() {
       .then((data) => {
         if (data) setSettings((prev) => ({ ...prev, ...data }));
       })
-      .catch((err) => showToast(`Errore caricamento impostazioni: ${err.message}`, true));
+      .catch((err) => showToast(formatApiError(err, 'Caricamento impostazioni'), true));
 
     apiFetch(`/api/documents`)
       .then((res) => res.ok ? res.json() : null)
       .then((data) => {
         if (Array.isArray(data)) setDocuments(data);
       })
-      .catch((err) => showToast(`Errore caricamento documenti: ${err.message}`, true));
+      .catch((err) => showToast(formatApiError(err, 'Caricamento documenti'), true));
 
     apiFetch(`/api/chunks?page=1&pageSize=20`)
       .then((res) => res.ok ? res.json() : null)
@@ -58,7 +58,7 @@ export default function App() {
           if (data.items.length > 0) setSelectedChunk(data.items[0]);
         }
       })
-      .catch((err) => showToast(`Errore caricamento chunk: ${err.message}`, true));
+      .catch((err) => showToast(formatApiError(err, 'Caricamento chunk'), true));
 
     apiFetch(`/api/telemetry`)
       .then((res) => res.ok ? res.json() : null)
@@ -71,14 +71,14 @@ export default function App() {
           setAvgLatencyMs(durations.length ? durations.reduce((a, b) => a + b, 0) / durations.length : null);
         }
       })
-      .catch((err) => showToast(`Errore telemetria: ${err.message}`, true));
+      .catch((err) => showToast(formatApiError(err, 'Caricamento telemetria'), true));
 
     apiFetch(`/api/eval`)
       .then((res) => res.ok ? res.json() : null)
       .then((data) => {
         if (Array.isArray(data)) setEvalMetrics(data);
       })
-      .catch((err) => showToast(`Errore caricamento valutazioni: ${err.message}`, true));
+      .catch((err) => showToast(formatApiError(err, 'Caricamento valutazioni'), true));
 
     setChunksCount(null);
     setStorageBytes(null);
@@ -213,7 +213,7 @@ export default function App() {
           showToast('Errore durante il salvataggio delle impostazioni.', true);
         }
       })
-      .catch(() => showToast('Impossibile contattare il backend.', true));
+      .catch((err) => showToast(formatApiError(err, 'Salvataggio impostazioni'), true));
   };
 
   const handleResetSettings = async () => {
@@ -244,8 +244,7 @@ export default function App() {
       const status = (value: unknown) => value === true ? 'OK' : 'KO';
       showToast(`FastAPI ${status(data.fastapi)} • LanceDB ${status(data.lancedb)} • Ollama ${status(data.ollama)}`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Errore sconosciuto';
-      showToast(`Verifica connessioni fallita: ${message}`, true);
+      showToast(formatApiError(error, 'Verifica connessioni'), true);
     }
   };
 
