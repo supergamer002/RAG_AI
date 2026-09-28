@@ -815,3 +815,535 @@ Actual `Ready` state requires one real query path with reranking enabled, becaus
 **NEXT EXACT TEST:** after startup, `CrossEncoder` should initially show `Lazy Standby`. Execute one query with reranking enabled; after successful model loading, refresh/observe health and the header should change to `Ready`.
 
 **STOP CONDITION:** do not eagerly load the CrossEncoder at startup just to change the label.
+
+
+## 20. Function-Flow Deep Audit — Round 11 / Ingestion, whole-folder ingestion, job visibility and light GUI
+
+**Scope:** audit-only. No source-code fix has been applied in this round.
+
+Sources inspected:
+- current `main` branch backend;
+- current React frontend;
+- current ingestion modules;
+- supplied `frontend.zip` used **only as a visual/reference implementation** for the light GUI and ingestion UX;
+- previous audit state.
+
+The reference frontend is not treated as an authority for API contracts, constants, model names, storage paths, timeouts, or other runtime values. Its hardcoded values are excluded from the target implementation.
+
+---
+
+### 20.1 Executive status
+
+The reported symptoms are consistent with multiple independent issues:
+
+1. **The ingestion job is already executed in the background**, but its progress model is too coarse for long-running work.
+2. The frontend displays a **synthetic animated bar** rather than a progress value derived from backend state.
+3. The frontend stops monitoring after 30 minutes or after five consecutive polling failures, even though the backend job may still be running.
+4. A batch/folder ingest rebuilds the full-text index **after every file**, creating a potentially very expensive repeated operation.
+5. The job registry is process-memory-only. There is no persistent queue/job registry and no startup recovery.
+6. The current document API exposes indexed documents reconstructed from LanceDB rows and assigns them the status `Indicizzato`; it does not represent queued/processing/ready/failed ingestion state.
+7. Whole-folder upload is implemented at source level, but its browser → multipart → backend → background-job path has **not been proven end-to-end in the current runtime**. The user's observation that folder ingestion does not start is therefore an open runtime finding, not a source-level closed issue.
+8. The light theme architecture is incomplete because most React components use Tailwind arbitrary hexadecimal color utilities directly. The current `theme-light` CSS overrides only a subset of generic semantic class names and therefore cannot consistently recolor those arbitrary utilities.
+
+---
+
+## 20.2 Severity summary
+
+| Severity | Finding | Classification |
+|---|---|---|
+| P0 candidate | Whole-folder ingestion can become impractically slow because full-text index creation is executed after every file in the batch | Confirmed source-level performance defect; runtime impact not yet measured |
+| P1 | Long file ingestion reports no meaningful progress until the whole file finishes embedding/indexing | Confirmed source |
+| P1 | Progress bar is animated but not data-driven; it does not represent actual completion | Confirmed source |
+| P1 | Frontend gives up after 30 minutes or five polling errors while the backend job may continue | Confirmed source |
+| P1 | Ingestion state exists only in process memory; restart/reload loses job visibility/recovery | Confirmed source |
+| P1 | No persistent queue / global job list / "ready for use" surface exists | Confirmed source |
+| P1 | Multiple ingestion jobs can be scheduled without an explicit concurrency governor | Confirmed source |
+| P1 | Whole-folder upload path exists but browser/runtime E2E failure is still unresolved | User-observed runtime issue; root cause open |
+| P2 | Unsupported files inside a folder are silently skipped before job creation result is explained clearly to the user | Confirmed source/UX |
+| P2 | Document status model contains states such as `In Elaborazione` and `In Coda`, but current backend document reconstruction reports `Indicizzato` for stored documents | Confirmed source contract gap |
+| P1/P2 | Light theme uses many hardcoded hexadecimal utilities across major components, bypassing current theme tokens | Confirmed source |
+| P2 | Supplied reference GUI contains hardcoded values and mock data; those must remain reference-only | Design constraint |
+
+---
+
+## 20.3 Ingestion entry point — complete flow
+
+### Frontend entry point
+
+`IngestModal.handleStartIngest()`
+
+Flow:
+
+`fileObjects → FormData → POST /api/ingest → jobId → polling /api/ingest/status/{jobId}`
+
+The frontend always creates a single multipart request containing all selected files.
+
+The request also sends:
+- `chunkSize`;
+- `chunkOverlap`;
+- `ocrEnabled`;
+- `relativePaths`.
+
+### Backend entry point
+
+`process_ingest()`
+
+Flow:
+
+`UploadFile[] → payload validation → active DB capture → source directory creation → file persistence → background task scheduling → jobId response`
+
+Important state capture:
+
+`captured_db_id = db_manager.active_id`
+
+This is correct with respect to database-switch races: the job is tied to the database active at submission time.
+
+### Background execution
+
+The request does **not** perform the heavy parsing/embedding synchronously.
+
+It schedules:
+
+`asyncio.to_thread(esegui_ingestion_batch_job, ... captured_db_id)`
+
+Therefore the reported "background" proposal is partly already implemented at execution level.
+
+The missing part is **durable job management and user-facing job observability**, not simply moving the current function to a background thread.
+
+---
+
+## 20.4 Progress-flow defect
+
+Current backend job fields include:
+- `filesTotal`;
+- `filesProcessed`;
+- `filesFailed`;
+- `chunksCreated`;
+- `currentFile`;
+- `startedAt`;
+- `updatedAt`;
+- `errors`.
+
+However, the state transition is too coarse.
+
+For each file:
+
+`parse file → generate chunks → embed chunks in batches → write chunks → increment filesProcessed`
+
+`filesProcessed` is incremented only after the complete file has finished.
+
+For a single very large PDF:
+
+`0 / 1 file`
+
+can therefore remain visible for a long time even while:
+- Docling is actively parsing;
+- embeddings are being generated;
+- chunks are being written to LanceDB.
+
+The backend already increments `chunksCreated` after embedding/upsert batches, but the frontend ignores this signal.
+
+### UX consequence
+
+A legitimate active job looks indistinguishable from a stalled job.
+
+This directly explains the user observation that ingestion "seems to last forever" and that it is impossible to tell whether it is blocked.
+
+---
+
+## 20.5 Frontend progress bar is not real progress
+
+Current `IngestModal.tsx` renders:
+
+`w-2/3 + animate-pulse`
+
+instead of computing width from job state.
+
+Therefore:
+
+- it is not a percentage;
+- it does not represent chunks processed;
+- it does not represent files processed;
+- it does not represent current stage;
+- it cannot distinguish parsing, embedding, indexing or FTS rebuild.
+
+The text `processed/total file` is more trustworthy than the bar, but remains coarse for large files.
+
+### Required future contract
+
+The backend should eventually expose explicit stage/state information, for example conceptually:
+
+`queued → reading → parsing → chunking → embedding → indexing → finalizing → ready`
+
+The exact enum and data model must be designed from the actual pipeline, not copied from the reference frontend.
+
+---
+
+## 20.6 False-failure conditions in the frontend
+
+### 30-minute client cutoff
+
+Current frontend stops polling after:
+
+`30 * 60 * 1000 ms`
+
+and reports that ingestion is taking too long.
+
+The backend job itself is **not cancelled**.
+
+Therefore the user receives a frontend error state while the backend may continue processing.
+
+This creates an inconsistent state:
+
+`UI = failed/stopped monitoring`
+
+while:
+
+`backend job = still running`
+
+### Five polling errors
+
+After five consecutive polling failures, the frontend also stops monitoring and reports an error.
+
+Again, the backend job is not cancelled.
+
+This is another false-negative path.
+
+### Function-flow conclusion
+
+The frontend currently treats **loss of observability** as **failure of ingestion**.
+
+These are not equivalent states and must be separated in the future job model.
+
+---
+
+## 20.7 Whole-folder flow
+
+### Source support confirmed
+
+The frontend provides:
+- multi-file selection;
+- a separate folder input using browser directory-selection attributes;
+- extraction of `webkitRelativePath`;
+- `relativePaths` JSON sent to the backend.
+
+The backend:
+- accepts multiple `UploadFile` objects;
+- validates file count and payload size;
+- accepts `relativePaths`;
+- sanitizes path components;
+- reconstructs the relative source tree under the database `sources` directory;
+- schedules a batch ingestion job.
+
+Therefore **whole-folder capability exists in source code**.
+
+### Why the user's "folder doesn't start" remains OPEN
+
+No browser/runtime trace was provided for this specific action in this audit.
+
+The following branches can terminate before actual ingestion:
+
+1. browser produces no files;
+2. folder contains no supported PDF/JSON files;
+3. file count exceeds the backend limit;
+4. total payload exceeds the backend limit;
+5. a malformed `relativePaths` payload is rejected;
+6. upload persistence fails;
+7. background database preparation fails;
+8. first file parsing fails.
+
+The frontend does not expose these branches distinctly enough.
+
+A future E2E test must therefore inspect:
+`browser selection → multipart request → HTTP response → jobId → status polling → first file → first chunk → first DB write`.
+
+---
+
+## 20.8 Confirmed folder-ingest performance defect: FTS rebuild per file
+
+In `esegui_ingestion_batch_job()`, after each file iteration the backend calls:
+
+`crea_indice_fulltext(tabella)`
+
+This happens **inside the file loop**.
+
+Therefore for `N` files:
+
+`N × full-text-index rebuild`
+
+instead of a single final rebuild (or another explicitly incremental strategy).
+
+This is particularly important for whole-folder ingestion because the number of files can be large.
+
+### Expected failure symptom
+
+The user can observe:
+- first files processing;
+- progressively longer pauses;
+- apparent infinite ingestion;
+- high CPU/disk activity;
+- API responsiveness degradation if the index operation is expensive.
+
+This is the strongest source-level explanation currently found for why folder ingestion can become dramatically slower than expected.
+
+**No code change is applied in this round.**
+
+---
+
+## 20.9 Ingestion concurrency and resource management
+
+`_ingestion_tasks` is a set used to retain asyncio tasks, but there is no explicit semaphore or worker queue enforcing `workerConcurrency`.
+
+The application therefore has no clear runtime contract connecting the user-facing `workerConcurrency` setting with ingestion parallelism.
+
+Multiple jobs can be scheduled.
+
+Potential consequences:
+- multiple Docling/torch workloads competing for CPU/RAM;
+- simultaneous embedding calls to Ollama;
+- multiple LanceDB writes;
+- memory pressure;
+- reduced API responsiveness;
+- unpredictable progress behavior.
+
+This is a design-level issue independent of the single-job progress defect.
+
+---
+
+## 20.10 Job durability / "files ready" proposal analysis
+
+The user's proposal is structurally sound, but the current implementation is not durable enough to support it.
+
+Current job state:
+
+`ingestion_jobs: Dict[str, Dict[str, Any]]`
+
+This is in-memory process state.
+
+Consequences:
+- restart loses job list;
+- `--reload` can interrupt running background work;
+- browser refresh loses the direct job context;
+- there is no global list of active/completed jobs;
+- there is no persisted "ready" state;
+- there is no reliable restart/resume checkpoint.
+
+### Required future architecture
+
+A stable implementation should separate:
+
+**Job state**
+`queued / running / completed / completed_with_errors / failed / cancelled`
+
+from:
+
+**Document state**
+`queued / processing / ready / failed`
+
+from:
+
+**Pipeline stage**
+`upload / parse / chunk / embed / index / finalize`
+
+and expose an authoritative job list to the frontend.
+
+The "ready for use" menu should be based on backend persistence, not local React state.
+
+---
+
+## 20.11 Document status contract gap
+
+`KnowledgeDocument.status` already defines:
+- `Indicizzato`;
+- `In Elaborazione`;
+- `In Coda`;
+- `Verificato`.
+
+But `_get_documents_for_db()` currently reconstructs stored documents and assigns:
+
+`status = "Indicizzato"`
+
+This means the type system anticipates richer lifecycle state while the backend currently has no corresponding persistent lifecycle model.
+
+The future implementation should not synthesize these statuses in React. The backend/database layer should become authoritative.
+
+---
+
+## 20.12 Supplied light-GUI reference — allowed use
+
+The attached `frontend.zip` is useful as **visual reference only**.
+
+The following aspects are reasonable design references for a future implementation:
+- clearer light/dark surface hierarchy;
+- card-based grouping;
+- stronger separation between primary action and secondary actions;
+- clearer ingestion progress block;
+- more readable text hierarchy;
+- explicit folder-selection affordance;
+- structured runtime notifications.
+
+The following must **not** be copied as runtime truth:
+- hardcoded model names;
+- hardcoded URLs;
+- hardcoded storage paths;
+- fixed limits;
+- mock data;
+- default values that should come from backend configuration.
+
+---
+
+## 20.13 Light theme audit
+
+The current frontend has a token layer in `index.css`:
+
+`--bg-surface`, `--bg-surface-low`, `--text-on-surface`, etc.
+
+However, the actual components predominantly use arbitrary hexadecimal Tailwind utilities directly.
+
+Static scan of the current main components found numerous hexadecimal literals in all major views, including:
+- `SettingsView.tsx`;
+- `PipelineTelemetryView.tsx`;
+- `VectorExplorerView.tsx`;
+- `DatabaseManagerModal.tsx`;
+- `ChunkModal.tsx`;
+- `Header.tsx`;
+- `Sidebar.tsx`;
+- `KnowledgeNodesView.tsx`;
+- `QueryWorkbenchView.tsx`;
+- `IngestModal.tsx`.
+
+Therefore the CSS selectors such as:
+
+`html.theme-light .bg-surface-container-low`
+
+cannot reliably recolor elements that are actually rendered with values such as:
+
+`bg-[#171b26]`
+
+because those are separate generated utilities.
+
+### Consequence
+
+The light theme currently changes some global elements but leaves many cards, borders, text and action surfaces visually tied to the dark palette.
+
+This is a structural theming issue, not merely a choice of nicer colors.
+
+### Required future direction
+
+The codebase should converge on semantic theme tokens/classes for:
+- surfaces;
+- surface elevations;
+- text primary/secondary/muted;
+- borders;
+- primary action;
+- danger/error;
+- status indicators;
+- overlays.
+
+The actual token values should live in one theme system. The reference GUI can inform hierarchy but not supply the literal values.
+
+---
+
+## 20.14 Additional frontend hygiene findings
+
+### IngestModal imports/constants
+
+Current `IngestModal.tsx` contains unused imports/constants such as:
+- `apiJson`;
+- `apiUrl`;
+- `getApiToken`;
+- `setApiToken`;
+- `API_BASE_URL`.
+
+These do not cause ingestion failure but indicate stale code paths and increase audit surface.
+
+### App-level API_BASE_URL
+
+`App.tsx` defines `API_BASE_URL` but current calls use `apiFetch()`. This is another disconnected constant.
+
+### Settings/theme persistence
+
+The quick theme toggle updates React/local state, while persistent configuration ownership remains partly in the settings flow. This should be unified in a later cleanup to avoid divergent theme state.
+
+---
+
+## 20.15 Branch map
+
+### Normal single-file ingest
+
+`select file → POST /api/ingest → save source → create job → background parse → chunk → embed → upsert → FTS → completed`
+
+### Long single-file ingest
+
+`select file → job created → parse/embedding runs → filesProcessed remains 0 → frontend shows synthetic animated bar → user cannot distinguish active work from stall`
+
+### Folder ingest
+
+`select folder → File[] + relativePaths → POST /api/ingest → save files → batch job → file 1 → embed/upsert → FTS rebuild → file 2 → embed/upsert → FTS rebuild → ... → completed`
+
+This branch is the main performance concern.
+
+### Frontend monitoring timeout
+
+`job running → 30 minutes reached → UI stops polling → UI reports timeout → backend job may continue`
+
+### Frontend transient polling loss
+
+`job running → 5 polling failures → UI reports failure → backend job may continue`
+
+### Process restart/reload
+
+`job running → process reload/restart → in-memory ingestion_jobs lost → browser cannot recover authoritative state`
+
+---
+
+## 20.16 Dead/disconnected or misleading state
+
+- Fake progress bar: **DISCONNECTED FROM REAL PROGRESS**.
+- `KnowledgeDocument.status` richer than backend lifecycle: **PARTIALLY DISCONNECTED**.
+- `workerConcurrency` setting vs actual ingestion scheduling: **NOT PROVEN CONNECTED**.
+- Folder-selection UI vs E2E runtime behavior: **OPEN**.
+- Theme tokens vs actual component color utilities: **PARTIALLY DISCONNECTED**.
+- Reference frontend mock/default values: **REFERENCE ONLY, NOT TARGET STATE**.
+
+---
+
+## 20.17 Required future test matrix
+
+No implementation change is requested in this round. Before fixing, the audit should reproduce:
+
+| Test | Required evidence |
+|---|---|
+| Single small PDF | jobId, every status transition, final chunk count |
+| Single large PDF | status/stage changes before first file completes |
+| Multi-file selection | per-file progress and failures |
+| Whole folder | multipart file count + relativePaths + job state |
+| Folder with unsupported files | clear supported/skipped counts |
+| >500 files | HTTP response and user-visible reason |
+| >2 GB payload | HTTP response and user-visible reason |
+| Long-running >30 min job | verify UI does not falsely mark backend job failed |
+| 5 transient status failures | verify observability loss is distinct from job failure |
+| Backend reload during job | determine desired recovery semantics |
+| Two simultaneous ingests | CPU/RAM/API responsiveness and concurrency behavior |
+| Light theme | every major surface must switch from dark tokens to light tokens |
+| Browser refresh during ingest | job must remain discoverable from authoritative backend state |
+
+---
+
+## 20.18 Audit conclusion
+
+The ingestion problem is **not one bug**.
+
+The strongest confirmed source-level problem is the batch-folder path rebuilding the full-text index after every file. The strongest UX problem is that the frontend has no trustworthy progress representation for long-running stages and can report failure merely because monitoring stopped.
+
+The user's idea of moving long ingestion into a background workflow and exposing a persistent "files ready" area is compatible with the current architecture, but it should be implemented as a **durable ingestion/job state model**, not as another polling timer around the existing in-memory dictionary.
+
+The light GUI should be redesigned around semantic theme tokens. The supplied reference can guide hierarchy and visual treatment, but its hardcoded values and mock/runtime data must not enter the application.
+
+**Current audit status: OPEN — ingestion lifecycle, folder ingestion runtime behavior, persistent job visibility, and light-theme architecture.**
+
+**No source-code fixes applied in Round 11.**
+
+**NEXT EXACT ROOT-CAUSE TARGET:** reproduce one folder ingest while observing the network request and `/api/ingest/status/{jobId}`, then correlate that runtime trace with the per-file FTS rebuild path.
+
+**STOP CONDITION:** do not start GUI polishing or background-job refactoring by guessing at the folder failure. First capture the folder request/job transition and establish whether the observed failure is upload validation, job creation, first-file processing, embedding, or FTS finalization.
