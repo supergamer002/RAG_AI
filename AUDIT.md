@@ -1,220 +1,320 @@
-# AUDIT.md — Function-Flow Deep Audit (Round 2)
+# AUDIT.md — Function-Flow Deep Audit (Round 3)
 
 ## Audit scope
-Second full audit of current main after the latest fix series.
 
-Methodology: Function-Flow Deep Audit — entry point → function → inputs/preconditions → callees → side effects/state → outputs → success/failure/exception branches → terminal states.
+Third Function-Flow Deep Audit after the user runtime test.
 
-Latest commits inspected include native dependency startup diagnostics, removal of production mock data, frontend API error normalization, evaluation API error surfacing, telemetry SSE diagnostics, and removal of hardcoded profile data.
+Methodology: entry point → function → preconditions → callees → state/side effects → outputs → exception branches → terminal state.
 
-**Important:** this is a source-level audit against GitHub main. No successful Windows runtime/build is claimed unless directly verified.
+Evidence used:
+- current `main` source on GitHub;
+- current `rag/index/db_manager.py`;
+- latest user runtime log (`Pasted text.txt`).
 
-## 1. Current status
+No claim of a successful full Windows RAG runtime is made beyond what the supplied runtime log demonstrates.
 
-The previous P0/P1 issues around generic frontend errors, hardcoded profile data and production mockData.ts are addressed in the current repository.
+## 1. Executive status
 
-NEW P0: webapp/backend/main.py contains this source line in mappa_chunk_item():
+The previous P0 syntax finding is CLOSED in the current `main`: `mappa_chunk_item()` now uses safe single quotes inside the f-string.
 
-    "dimensions": (f"{len(c.get("vector", []))}d" if c.get("vector") is not None and len(c.get("vector", [])) else None),
+The user runtime test demonstrates that **Uvicorn/FastAPI starts and several endpoints respond**, but the database-dependent API surface is broken because the module-level `db_manager` is `None`.
 
-The inner double quotes conflict with the outer f-string quoting. If this is the literal executed source, Python compilation fails before FastAPI can start.
+The runtime log shows:
+- `GET /api/settings` → 200;
+- `GET /api/telemetry` → 200;
+- `GET /api/eval` → 200;
+- `GET /api/documents` → 500;
+- `GET /api/chunks?page=1&pageSize=20` → 500;
+- `GET /api/stats` → 500.
 
-Therefore the audit remains OPEN until py_compile and backend import succeed.
+The document endpoint fails at `_get_documents_for_db(db_manager.active_id)` because `db_manager` is `None`. fileciteturn59file0L85-L91
+
+The chunks endpoint fails when `get_chunks()` calls `db_manager.get_active_table()`. fileciteturn59file0L171-L179
+
+The stats endpoint fails for the same reason. fileciteturn59file0L262-L270
+
+The same failures repeat later in the log, confirming this is persistent state/initialization failure rather than a transient request. fileciteturn59file0L359-L447
 
 ## 2. Severity summary
 
 | Severity | Finding | Status |
 |---|---|---|
-| P0 | Invalid f-string quoting in mappa_chunk_item() | Confirmed by source inspection; compile test required |
-| P0 | Native PyArrow/LanceDB startup failure | Mitigated diagnostically; runtime verification required |
-| P0 | Cascading frontend Failed to fetch | Diagnostics improved; runtime verification required |
-| P1 | Notification icon has no panel/handler but remains visually interactive | Still present; UX inconsistency |
-| P1 | SSE error handling | Improved; runtime connection required |
-| P1 | Evaluation API errors | Improved |
-| P1 | Evaluation worker DB capture | Implemented |
-| P1 | Health dependency diagnostics | Implemented |
-| P1 | Export/import embedding metadata | Previously implemented; runtime verification required |
-| P1 | Long-lived API token in SSE query string when auth is enabled | Security/design weakness |
-| P2 | Full pytest/build/runtime suite | Not verified in this audit environment |
+| P0 | `db_manager` becomes `None` when the RAG import block fails, while DB-dependent routes remain enabled | Confirmed runtime |
+| P0 | Native PyArrow/LanceDB/RAG import failure is not preventing FastAPI startup but leaves a partially functional backend | Confirmed architecture/runtime behavior |
+| P0 | DB-dependent frontend surface cascades into repeated HTTP 500 responses | Confirmed runtime |
+| P1 | `/api/health` detects `db_manager is None`, but other DB routes do not share the same dependency guard | Confirmed source |
+| P1 | Notification icon remains disconnected from a real feature | Open |
+| P1 | SSE has visible error handling but no reconnect/backoff | Open |
+| P1 | SSE token may be exposed in URL when authentication is enabled | Open |
+| P2 | Full pytest/frontend build/runtime suite | Not fully verified |
 
-## 3. Entry points and function flow
+## 3. Critical function-flow: startup → db_manager
 
-### Backend startup
-main.py → standard imports → RAG import block → config → FastAPI → middleware → reranker wrapper → generator wrapper → routes.
+### 3.1 Current startup chain
 
-The RAG imports are now wrapped in a try/except and store RAG_IMPORT_ERROR so /api/health can report native dependency failures.
+`webapp/backend/main.py` imports the RAG dependency block inside:
 
-Important limitation: this only protects the explicit RAG import block. Syntax errors or exceptions during later global initialization still prevent startup.
+`try: from rag.index.db_manager import db_manager ...`
 
-CrossEncoderReranker itself loads FlagEmbedding lazily; its constructor stores the model name and actual heavy model loading occurs on first rerank.
+If **any** import in that single block raises an exception, execution enters the broad `except Exception`.
 
-### Health
-/api/health → Ollama HTTP probe → active DB embedding model → /api/embed probe → LanceDB dependency state → active table → vector dimension → JSON response.
+The except branch explicitly assigns:
 
-Response exposes fastapi, lancedb, lancedb_detail, ollama, ollama_detail, startup_error and timestamp.
+`db_manager = None`
 
-This is materially better than collapsing native dependency failures into browser-level Failed to fetch.
+and also replaces the other RAG dependencies with `None`.
 
-### API layer
-apiFetch adds optional Bearer auth, AbortController, 15-second timeout and ApiError classification: network, timeout, http, malformed.
+This design intentionally keeps FastAPI importable for diagnostic mode, but it has an important consequence: **the application can start in a degraded state while DB routes still execute code that assumes `db_manager` exists.**
 
-apiJson parses JSON, reports malformed successful responses and converts non-2xx responses into structured ApiError.
+### 3.2 DatabaseManager construction
 
-### Telemetry
-PipelineTelemetryView → getApiToken → EventSource(/api/telemetry/stream) → connecting → connected → telemetry event → JSON parse → logs.
+Current `rag/index/db_manager.py` ends with:
 
-Invalid SSE JSON becomes visible error state. EventSource errors now expose the stream URL instead of a generic failure.
+`db_manager = DatabaseManager()`
 
-Remaining issue: onerror immediately closes the source and there is no reconnect/backoff loop.
+`DatabaseManager.__init__()`:
+1. stores the base directory;
+2. creates the directory;
+3. creates the registry path;
+4. creates the lock;
+5. calls `_load_registry()`.
 
-### Evaluation
-POST /api/eval/run → capture db_manager.active_id → create job → worker thread → get_table_for_db(captured_db_id) → document check → query on captured DB → captured DB embedding model → metrics → terminal job.
+`_load_registry()` either loads the registry or creates a default database entry and writes the registry.
 
-Database identity is consistently carried through the worker, removing the previous active-DB race.
+Therefore, when `rag.index.db_manager` imports successfully, `db_manager` should be a real `DatabaseManager` instance.
 
-Terminal states: completed, completed_with_errors, failed; individual cases can be Skipped, Found, Not found or Error.
+### 3.3 Root cause reconstructed
 
-### Ingestion
-/api/ingest → validation → captured database → async worker → extraction → chunking → incremental embedding batches → LanceDB upsert → FTS → terminal state.
+The runtime state `db_manager is None` is therefore not produced by normal database activation logic.
 
-Confirmed protections: target DB is explicit, embedding model follows target DB, vector dimensions are checked before commit, and batch progress is preserved when a later batch fails.
+It is produced by the **exception branch of the broad RAG import block in `main.py`**.
 
-### Query
-/api/query → validation → active table → target DB embedding → dense/sparse/hybrid retrieval → rerank → generation → source mapping.
+That means the next root-cause target is the exact exception stored in:
 
-Fallbacks exist for retrieval, reranker and generation. The broad retrieval except Exception currently rebuilds the FTS index for any retrieval exception; this can hide unrelated failures and cause unnecessary work.
+`RAG_IMPORT_ERROR`
 
-## 4. UI audit
+Likely candidates include native dependency loading/import errors (PyArrow/LanceDB), but the exact exception must be read from `/api/health` or startup output before assigning a more specific cause.
 
-### Notifications
-The previous fake notification panel bug has not been replaced by a real notification feature. Header.tsx now renders a notification-looking div with no handler.
+## 4. Runtime branch map
 
-Current classification: P1 UX inconsistency. If this is a status indicator, remove cursor-pointer and notification affordance. If it is meant to be a feature, implement state, panel and data source.
+### Branch A — RAG imports succeed
 
-### Top-right runtime widget
-The previous synthetic username/cluster/avatar has been removed. The widget now represents runtime RAG state with hub/cloud-off icon and runtime-status tooltip.
+`main.py`
+→ import `db_manager`
+→ `DatabaseManager()`
+→ registry load/create
+→ routes receive valid manager
+→ DB endpoints can call `active_id`, `get_active_table()`, etc.
 
-### Mock data
-webapp/frontend/src/data/mockData.ts is absent from current main. Previous production mock-data finding is CLOSED.
+Expected terminal states:
+- successful DB API response;
+- controlled HTTP error for invalid DB operation.
 
-## 5. Security audit
+### Branch B — any RAG import fails
 
-API middleware applies rate limiting and optional Bearer token validation.
+`main.py`
+→ broad import exception
+→ `RAG_IMPORT_ERROR = ...`
+→ `db_manager = None`
+→ FastAPI still starts
+→ non-DB endpoints may respond
+→ DB endpoints dereference `None`
+→ unhandled `AttributeError`
+→ HTTP 500.
 
-SSE accepts token query parameter because native EventSource cannot set arbitrary Authorization headers.
+This branch is **confirmed by the supplied runtime log**.
 
-This works functionally but a long-lived API token in a URL can leak into browser/proxy/history logs. Prefer a short-lived stream credential or cookie/session mechanism when auth is enabled.
+### Branch C — health endpoint in degraded mode
 
-## 6. Dead/disconnected code
+`/api/health`
+→ detects `db_manager is None`
+→ returns `lancedb=false`
+→ includes database/import diagnostic information instead of crashing.
 
-- Production mockData.ts: removed.
-- Fake profile identity: removed.
-- Notification UI: disconnected from a real feature.
-- run_evaluations(background_tasks): parameter is unused because the worker is explicitly scheduled with asyncio.to_thread.
-- EvaluationsView.tsx declares API_BASE_URL but does not use it.
+This is a good diagnostic branch, but it is not propagated to the rest of the API surface.
 
-## 7. Confirmed P0
+## 5. Confirmed broken flows
 
-BUG-P0-001 — invalid f-string in mappa_chunk_item.
+### Documents
 
-Location: webapp/backend/main.py.
+`GET /api/documents`
+→ `get_documents()`
+→ `_get_documents_for_db(db_manager.active_id)`
+→ `db_manager is None`
+→ `AttributeError`
+→ HTTP 500.
 
-Current expression:
+Runtime evidence: fileciteturn59file0L85-L88
 
-    f"{len(c.get("vector", []))}d"
+### Chunks
 
-Expected safe form:
+`GET /api/chunks`
+→ `get_chunks()`
+→ `db_manager.get_active_table()`
+→ `db_manager is None`
+→ `AttributeError`
+→ HTTP 500.
 
-    f"{len(c.get('vector', []))}d"
+Runtime evidence: fileciteturn59file0L171-L179
 
-Impact if literal: main.py cannot compile/import, FastAPI cannot start, /api/health cannot run, and frontend runtime testing is blocked.
+### Stats
 
-Required verification:
+`GET /api/stats`
+→ `get_stats()`
+→ `db_manager.get_active_table()`
+→ `db_manager is None`
+→ `AttributeError`
+→ HTTP 500.
 
-    python -m py_compile webapp/backend/main.py
-    python -c "import webapp.backend.main"
+Runtime evidence: fileciteturn59file0L262-L270
 
-Only after these pass should runtime testing continue.
+### Repetition
 
-## 8. Remaining P1/P2 queue
+The same DB-dependent failures recur later in the runtime log, while settings/evaluation/telemetry continue to answer. This demonstrates a stable degraded backend state rather than an isolated request failure. fileciteturn59file0L359-L447
 
-P1 runtime sequence:
-1. py_compile and backend import.
-2. PyArrow import and pyarrow.dataset.
-3. LanceDB import.
-4. Uvicorn startup.
-5. /api/health.
-6. Ollama embedding probe.
-7. telemetry SSE.
-8. evaluation start/status.
-9. ingestion.
-10. query.
+## 6. Important distinction: startup succeeds, application does not
 
-P1 UX:
-1. Decide notification status-only vs real feature.
-2. Add SSE reconnect/backoff.
+The test disproves the previous assumption that a source-level startup blocker is still preventing Uvicorn.
 
-P1/P2 robustness:
-1. Narrow retrieval exception handling.
-2. Log fallback activation and original exception.
-3. Avoid long-lived API token in SSE query string when auth is enabled.
-4. Remove unused variables/parameters.
+The backend process is alive enough to serve multiple routes.
 
-## 9. Test status
+However, this is a **partial-start/degraded-start condition**, not a healthy application startup.
 
-Source tests required:
-- python -m py_compile webapp/backend/main.py
-- import webapp.backend.main
-- import pyarrow
-- import pyarrow.dataset
-- import lancedb
-- frontend TypeScript/Vite build.
+The current diagnostic architecture deliberately allows this condition, but it must expose a controlled dependency-unavailable response for DB routes instead of raw `AttributeError`/500.
 
-Runtime sequence:
-startup → health → dependencies → frontend → telemetry → evaluation → ingestion → query → database management.
+## 7. Correct fix direction
 
-Full runtime/build success has NOT been verified in this audit.
+Do **not** simply add unrelated `if db_manager is None` checks to every route.
 
-## 10. Audit memory checkpoint
+First establish the exact import failure:
 
-CURRENT HEAD: main after startup diagnostics, API error normalization, telemetry diagnostics, mock/profile cleanup.
+1. call `/api/health`;
+2. inspect `startup_error`;
+3. identify the failing RAG/native import;
+4. verify `import pyarrow`, `import pyarrow.dataset`, and `import lancedb` in the same environment;
+5. fix the dependency/import failure if possible.
 
-LAST CRITICAL FINDING: P0 source-level f-string syntax defect in main.py::mappa_chunk_item.
+Then add a centralized dependency guard for the intentional diagnostic/degraded mode so DB routes return a structured **503 Service Unavailable** with the real dependency error rather than an internal `AttributeError`.
 
-CLOSED SINCE PREVIOUS AUDIT:
-- hardcoded profile/cluster/avatar
-- production mockData.ts
-- generic API fetch diagnostics
-- generic evaluation errors
-- opaque telemetry SSE errors
-- native dependency failures now have a diagnostic path
-- evaluation target DB race
-- target DB embedding selection
-- vector dimension validation
-- chunker non-progress branch.
+Desired semantic contract:
 
-OPEN:
-- P0 compile/import verification
-- PyArrow/LanceDB Windows runtime verification
-- /api/health runtime
-- Ollama health
-- SSE real connection/reconnect
-- evaluation real execution
-- ingestion/query end-to-end
-- notification UX decision
-- narrow retrieval exception
-- SSE token handling when auth is enabled.
+- FastAPI available + RAG dependencies available + DB available → normal operation.
+- FastAPI available + RAG dependency unavailable → health reports degraded state; DB-dependent routes return controlled 503.
+- DB exists but operation fails → route-specific 4xx/5xx with preserved root exception.
+- No silent conversion of dependency failures into generic browser `Failed to fetch`.
 
-NEXT EXACT FUNCTION: webapp/backend/main.py::mappa_chunk_item().
+## 8. Other current findings
 
-NEXT EXACT TEST: python -m py_compile webapp/backend/main.py.
+### Notification UI — P1
 
-STOP CONDITION: do not continue to high-level RAG runtime testing until backend source compilation/import is confirmed.
+The notification-looking header element remains disconnected from a real notification state/panel.
 
-## 11. Conclusion
+Recommended behavior must be chosen explicitly:
+- status-only indicator: remove interactive affordance;
+- real notification feature: connect state, panel and data source.
 
-The repository is materially improved compared with the previous audit: fake profile data and production mock data are gone, API failures are diagnosable, telemetry failures are visible, and evaluation/database context is more robust.
+### Telemetry SSE — P1
 
-However, the current source must first pass Python compilation. The mappa_chunk_item f-string is therefore the immediate blocker.
+Error state is now visible, but there is no reconnect/backoff strategy.
 
-**Audit status: OPEN — P0 source verification required.**
+### Query retrieval fallback — P1/P2
+
+The current source narrows the fallback to `ValueError`, `KeyError`, and `RuntimeError`, which is better than the previous broad `Exception` branch. It still rebuilds FTS for errors that may not actually be FTS failures. The fallback reason should be classified more precisely.
+
+### SSE authentication — P1/P2
+
+When API authentication is enabled, SSE may receive the token through a query parameter because native EventSource cannot set an Authorization header. A long-lived token in a URL can leak through logs/history/proxies. Prefer a short-lived stream credential or session/cookie approach.
+
+### Dead/disconnected code
+
+- production `mockData.ts`: CLOSED;
+- hardcoded profile/cluster/avatar: CLOSED;
+- `run_evaluations(background_tasks)`: CLOSED/cleaned in current source; no unused parameter remains;
+- `EvaluationsView.tsx` unused `API_BASE_URL`: still inspect/clean;
+- notification UI: still disconnected.
+
+## 9. Verification status
+
+### Confirmed by current source
+
+- `mappa_chunk_item()` f-string syntax is corrected.
+- `DatabaseManager()` is constructed at module import when `rag.index.db_manager` imports successfully.
+- `main.py` intentionally falls back to `db_manager = None` on any RAG import exception.
+- `/api/health` contains a specific `db_manager is None` diagnostic branch.
+- DB-dependent routes do not consistently guard that degraded state.
+
+### Confirmed by runtime log
+
+- FastAPI/Uvicorn serves requests.
+- settings/telemetry/evaluation endpoints can return 200.
+- documents/chunks/stats endpoints return 500 due to `db_manager is None`.
+
+### Not yet confirmed
+
+- exact `RAG_IMPORT_ERROR` value in the tested runtime;
+- successful `import pyarrow`;
+- successful `import pyarrow.dataset`;
+- successful `import lancedb`;
+- successful creation/loading of `DatabaseManager` in the user's Windows environment;
+- successful `/api/health` response from the current tested process;
+- end-to-end ingestion;
+- end-to-end query;
+- frontend production build.
+
+## 10. Next exact actions
+
+### P0 — root cause
+
+1. Read `/api/health` from the same running backend.
+2. Capture `startup_error` and `lancedb_detail`.
+3. Test the failing native import directly.
+4. Repair the dependency/import problem.
+5. Restart backend.
+6. Re-test `/api/health`, `/api/documents`, `/api/chunks`, `/api/stats`.
+
+### P0 — degraded-mode safety
+
+After the root dependency issue is fixed, add one centralized DB dependency helper/guard and route all DB-dependent endpoints through it.
+
+Expected failure response when dependency is unavailable:
+
+HTTP 503 with structured JSON containing:
+- `detail`;
+- dependency/startup error;
+- retry/action hint.
+
+No raw `AttributeError: 'NoneType' object has no attribute ...` should reach the client.
+
+### P1
+
+Then continue:
+
+`health → databases → documents → chunks → stats → telemetry SSE → evaluation → ingestion → query`
+
+## 11. Audit memory checkpoint
+
+**CURRENT STATE:** backend source compiles sufficiently for the user's runtime test; previous f-string P0 is CLOSED.
+
+**CURRENT CRITICAL FINDING:** intentional diagnostic import fallback leaves `db_manager=None`, while DB routes dereference it without a centralized guard.
+
+**ROOT-CAUSE LOCATION:** `webapp/backend/main.py` RAG import `try/except`.
+
+**DEPENDENCY INITIALIZER:** `rag/index/db_manager.py::db_manager = DatabaseManager()`.
+
+**RUNTIME PROOF:** documents/chunks/stats 500 with `AttributeError` on `db_manager`; settings/telemetry/eval return 200.
+
+**NEXT EXACT FUNCTION:** startup RAG import block in `webapp/backend/main.py`, then `DatabaseManager.__init__()` only after the import failure is identified.
+
+**NEXT EXACT TEST:** `GET /api/health` on the same running backend and capture `startup_error`.
+
+**STOP CONDITION:** do not mask the root native dependency/import problem with per-route patches before identifying the exact import exception.
+
+## 12. Conclusion
+
+The current test has moved the investigation past the previous syntax blocker.
+
+The backend is now able to start, but it starts in a degraded state because the RAG import block has fallen into its diagnostic exception branch. The resulting `db_manager=None` state is confirmed to break the document, chunk and statistics flows.
+
+The correct next step is therefore **root-cause the RAG import failure first**, then enforce a centralized 503 degraded-mode contract for DB-dependent routes.
+
+**Audit status: OPEN — P0 native RAG import/dependency failure and degraded DB state.**
