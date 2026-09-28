@@ -1324,7 +1324,10 @@ def _esegui_query_su_tabella(
                 search_mode=search_mode,
                 hybrid_alpha=hybrid_alpha,
             )
-    except Exception:
+    except (ValueError, KeyError, RuntimeError) as exc:
+        # FTS/index errors can be recovered by rebuilding the index. Other
+        # exceptions must remain visible instead of being silently masked.
+        logger.warning("Retrieval fallback: rebuilding FTS index after %s: %s", type(exc).__name__, exc)
         crea_indice_fulltext(tabella)
         candidati = ricerca_ibrida(
             tabella,
@@ -1385,7 +1388,7 @@ def get_eval_status(job_id: str):
 
 
 @app.post("/api/eval/run")
-async def run_evaluations(background_tasks: BackgroundTasks):
+async def run_evaluations():
     job_id = str(uuid.uuid4())
     captured_db_id = db_manager.active_id
     eval_jobs[job_id] = {
