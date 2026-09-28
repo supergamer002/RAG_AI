@@ -738,3 +738,80 @@ This gives the next runtime test enough evidence to distinguish:
 **NEXT EXACT TEST:** open `http://localhost:8000/api/health` and inspect `ollama`, `ollama_detail`, `ollamaEmbedding`, and `ollamaEmbeddingDetail`. Then reproduce one failing API request.
 
 **STOP CONDITION:** do not classify an Ollama server outage from an embedding-model failure alone.
+
+
+## 19. Applied fix — Round 10 / CrossEncoder runtime state
+
+### User runtime finding
+
+The only remaining header status shown as:
+
+`CrossEncoder: Lazy Standby`
+
+was hardcoded in the React header and did not reflect the actual runtime object.
+
+### Reconstructed backend flow
+
+`CrossEncoderReranker.__init__() → self._modello=None`
+
+The CrossEncoder is intentionally lazy. The model is not loaded during application startup.
+
+First real reranking:
+
+`_carica_modello() → FlagReranker(...) → self._modello=<loaded model>`
+
+Therefore the meaningful runtime states are:
+
+- `standby`: object initialized, model not loaded yet;
+- `ready`: model successfully loaded;
+- `error`: a previous model-load attempt failed.
+
+### Backend change
+
+`CrossEncoderReranker.stato()` now exposes the runtime state without forcing model loading.
+
+It returns:
+- status;
+- user-facing label;
+- configured model name;
+- loaded flag;
+- last load error, when present.
+
+A model-load failure is retained for diagnostics, then re-raised to the existing query fallback path.
+
+### Health API change
+
+`/api/health` now returns `crossEncoder` with the live state of the global reranker instance.
+
+Health inspection does **not** instantiate/download the model merely to display its status.
+
+### Frontend change
+
+The Header no longer contains a hardcoded `Lazy Standby`.
+
+It consumes `data.crossEncoder` from `/api/health` and displays:
+
+- `Lazy Standby` before the first successful model load;
+- `Ready` once the model has actually loaded;
+- `Error` if model initialization failed;
+- `Unavailable` only when the component itself could not be initialized.
+
+The model name and load error are available through the tooltip.
+
+### Stability rationale
+
+This preserves the intended lazy-loading architecture. The header reports state; it does not cause a heavyweight model load.
+
+It also avoids incorrectly presenting a model as ready merely because its Python wrapper object exists.
+
+### Verification status
+
+Source flow is now connected end-to-end:
+
+`CrossEncoderReranker → /api/health → Header`
+
+Actual `Ready` state requires one real query path with reranking enabled, because only that path loads the model.
+
+**NEXT EXACT TEST:** after startup, `CrossEncoder` should initially show `Lazy Standby`. Execute one query with reranking enabled; after successful model loading, refresh/observe health and the header should change to `Ready`.
+
+**STOP CONDITION:** do not eagerly load the CrossEncoder at startup just to change the label.
