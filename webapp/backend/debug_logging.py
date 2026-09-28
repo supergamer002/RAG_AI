@@ -128,6 +128,8 @@ def configure_debug_logging() -> bool:
 
 def _redact(key: str, value: Any) -> Any:
     key_l = str(key).lower()
+    if key_l in {"http_proxy", "https_proxy", "all_proxy"}:
+        return "<REDACTED_PROXY>"
     if any(part in key_l for part in _SENSITIVE_PARTS):
         return "<REDACTED>"
     if value is None:
