@@ -73,6 +73,24 @@ def upsert_chunks(
     if not chunks:
         return 0
 
+    # Verifica esplicita della dimensione del vettore prima del commit.
+    # Evita errori LanceDB poco leggibili e, soprattutto, impedisce di mescolare
+    # embedding prodotti da modelli/dimensioni incompatibili con il database.
+    expected_dim = None
+    try:
+        vector_field = tabella.schema.field("vector")
+        vector_type = vector_field.type
+        expected_dim = getattr(vector_type, "list_size", None)
+    except Exception:
+        expected_dim = None
+    if isinstance(expected_dim, int) and expected_dim > 0:
+        invalid = [len(emb) for emb in embeddings if len(emb) != expected_dim]
+        if invalid:
+            raise ValueError(
+                f"Dimensione embedding incompatibile: il database richiede {expected_dim} dimensioni, "
+                f"ma sono stati ricevuti vettori di dimensione {invalid[0]}."
+            )
+
     record = [
         {**c.to_record(), "vector": emb} for c, emb in zip(chunks, embeddings)
     ]

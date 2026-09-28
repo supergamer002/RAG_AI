@@ -192,7 +192,11 @@ def get_health():
             ollama_detail = "OK"
             # Verifica modello embedding
             try:
-                emb_model = config.get("embeddingModel", "qwen3-embedding:0.6b")
+                try:
+                    active_info = db_manager.get_active_info()
+                except Exception:
+                    active_info = {}
+                emb_model = active_info.get("embeddingModel") or config.get("embeddingModel", "qwen3-embedding:0.6b")
                 # Chiamata minima a /api/embed per verificare modello e connessione
                 emb_res = requests.post(
                     f"{config.get('ollamaUrl', 'http://localhost:11434').rstrip('/')}/api/embed",
@@ -211,15 +215,21 @@ def get_health():
         ollama_detail = f"Errore connessione: {str(e)}"
 
     lancedb_ok = True
+    lancedb_detail = "OK"
     try:
         tabella = db_manager.get_active_table()
         tabella.count_rows()
-    except Exception:
+        schema_vector = tabella.schema.field("vector")
+        vector_dim = getattr(schema_vector, "type", None)
+        lancedb_detail = f"OK (dimensione vettore: {getattr(vector_dim, 'list_size', 'sconosciuta')})"
+    except Exception as e:
         lancedb_ok = False
+        lancedb_detail = f"Errore database: {type(e).__name__}: {e}"
 
     return {
         "fastapi": True,
         "lancedb": lancedb_ok,
+        "lancedb_detail": lancedb_detail,
         "ollama": ollama_ok,
         "ollama_detail": ollama_detail,
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -347,7 +357,7 @@ def execute_query(req: QueryRequest):
         if tabella.count_rows() == 0:
             return {"answer": "", "chunks": []}
 
-        risultato = _esegui_query_su_tabella(req, tabella)
+        risultato = _esegui_query_su_tabella(req, tabella, database_id=db_manager.active_id)
         risultato.pop("queryEmbedding", None)
         return risultato
     except HTTPException:
@@ -372,29 +382,28 @@ def _format_file_size(size_bytes: int) -> str:
     return f"{value:.2f} TB"
 
 
-@app.get("/api/documents")
-def get_documents():
-    tabella = db_manager.get_active_table()
+def _get_documents_for_db(database_id: str) -> List[Dict[str, Any]]:
+    """Ricostruisce i documenti partendo esclusivamente dal database indicato."""
+    tabella = db_manager.get_table_for_db(database_id)
     totale_righe = tabella.count_rows()
     if totale_righe == 0:
         return []
 
     righe = tabella.search().select(["chunk_id", "fonte_titolo", "tipo_fonte", "sezione", "fonte_path"]).to_list()
     per_doc: Dict[str, Dict[str, Any]] = {}
-    active_info = db_manager.get_active_info()
-    embedding_dim = active_info.get("dimension")
+    db_info = db_manager.get_info_for_id(database_id)
+    embedding_dim = db_info.get("dimension")
     table_name = config.get("tableName", "chunks")
 
     for r in righe:
         titolo = r.get("fonte_titolo", "Documento")
         path_str = r.get("fonte_path", "")
         doc_key = path_str or titolo
-        doc_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{active_info['id']}::{doc_key}"))
+        doc_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{db_info['id']}::{doc_key}"))
 
         if doc_id not in per_doc:
             ext = Path(path_str).suffix.upper().replace(".", "") if path_str else "PDF"
             doc_type = ext if ext in ["PDF", "DOCX", "PYTHON", "YAML", "MARKDOWN", "JSON"] else "PDF"
-
             per_doc[doc_id] = {
                 "id": doc_id,
                 "name": titolo,
@@ -414,7 +423,7 @@ def get_documents():
         if path_str:
             candidate = Path(path_str)
             if not candidate.is_absolute():
-                candidate = Path(active_info["path"]) / candidate
+                candidate = Path(db_info["path"]) / candidate
             source_candidate = candidate
         if source_candidate and source_candidate.exists() and source_candidate.is_file():
             try:
@@ -431,8 +440,12 @@ def get_documents():
     for doc in per_doc.values():
         doc["sectionsCount"] = len(doc.pop("sectionsSet"))
         docs.append(doc)
-
     return docs
+
+
+@app.get("/api/documents")
+def get_documents():
+    return _get_documents_for_db(db_manager.active_id)
 
 
 @app.post("/api/documents/{document_id}/reindex")
@@ -629,6 +642,7 @@ def _indicizza_chunks_incrementale(
     chunks: Sequence[Chunk],
     job: Dict[str, Any],
     batch_size: int = 32,
+    database_id: Optional[str] = None,
 ) -> int:
     """Genera embedding e salva i chunk a piccoli batch.
 
@@ -642,8 +656,8 @@ def _indicizza_chunks_incrementale(
             continue
         try:
             # Use embedder tied to the active database
-            active_info = db_manager.get_active_info()
-            emb_model = active_info.get("embeddingModel", config.get("embeddingModel", "qwen3-embedding:0.6b"))
+            target_info = db_manager.get_info_for_id(database_id or db_manager.active_id)
+            emb_model = target_info.get("embeddingModel", config.get("embeddingModel", "qwen3-embedding:0.6b"))
             emb_url = f"{config.get('ollamaUrl', 'http://localhost:11434').rstrip('/')}/api/embed"
             current_embedder = embedder_manager.get_embedder(emb_model, emb_url)
 
@@ -718,7 +732,7 @@ def esegui_ingestion_batch_job(
                 chunk.ricalcola_id()
 
             if chunks:
-                indicizzati = _indicizza_chunks_incrementale(tabella, chunks, job)
+                indicizzati = _indicizza_chunks_incrementale(tabella, chunks, job, database_id=target_db_id)
                 total_chunks += indicizzati
 
             job["filesProcessed"] += 1
@@ -1241,7 +1255,11 @@ def _valuta_faithfulness(query: str, answer: str, contexts: List[str]) -> float:
     return round(supported / total, 4) if total else 0.0
 
 
-def _esegui_query_su_tabella(req: QueryRequest, tabella: Any) -> Dict[str, Any]:
+def _esegui_query_su_tabella(
+    req: QueryRequest,
+    tabella: Any,
+    database_id: Optional[str] = None,
+) -> Dict[str, Any]:
     """Esegue la pipeline RAG su una tabella esplicita, senza dipendere dal DB attivo."""
     top_k = req.topK or config.get("topKCandidates", 20)
     top_n = req.topN or config.get("topNRerank", 6)
@@ -1251,8 +1269,8 @@ def _esegui_query_su_tabella(req: QueryRequest, tabella: Any) -> Dict[str, Any]:
     query_emb = None
     if search_mode != "sparse":
         # Use embedder tied to the active database
-        active_info = db_manager.get_active_info()
-        emb_model = active_info.get("embeddingModel", config.get("embeddingModel", "qwen3-embedding:0.6b"))
+        target_info = db_manager.get_info_for_id(database_id or db_manager.active_id)
+        emb_model = target_info.get("embeddingModel", config.get("embeddingModel", "qwen3-embedding:0.6b"))
         emb_url = f"{config.get('ollamaUrl', 'http://localhost:11434').rstrip('/')}/api/embed"
         current_embedder = embedder_manager.get_embedder(emb_model, emb_url)
         query_emb = current_embedder.embed_uno(req.query)
@@ -1362,7 +1380,7 @@ async def run_evaluations(background_tasks: BackgroundTasks):
                 try:
                     # Verify if the expected document actually exists in the active database
                     # If it doesn't, mark the case as 'Skipped' to avoid misleading 'Not found' results
-                    doc_exists = any(test_case["expectedDoc"] in d["sourcePath"] for d in db_manager.get_documents())
+                    doc_exists = any(test_case["expectedDoc"] in d["sourcePath"] for d in _get_documents_for_db(captured_db_id))
                     if not doc_exists:
                         case_res = {
                             **test_case,
@@ -1397,6 +1415,7 @@ async def run_evaluations(background_tasks: BackgroundTasks):
                     risultato = _esegui_query_su_tabella(
                         QueryRequest(query=test_case["query"], topK=20, topN=6, searchMode="hybrid", hybridAlpha=0.7, enableRerank=True),
                         tabella,
+                        database_id=captured_db_id,
                     )
                     chunks = risultato.get("chunks", [])
                     flags = [
@@ -1408,7 +1427,7 @@ async def run_evaluations(background_tasks: BackgroundTasks):
                     query_embedding = risultato.get("queryEmbedding") or []
 
                     # Use embedder tied to the active database
-                    active_info = db_manager.get_active_info()
+                    active_info = db_manager.get_info_for_id(captured_db_id)
                     emb_model = active_info.get("embeddingModel", config.get("embeddingModel", "qwen3-embedding:0.6b"))
                     emb_url = f"{config.get('ollamaUrl', 'http://localhost:11434').rstrip('/')}/api/embed"
                     current_embedder = embedder_manager.get_embedder(emb_model, emb_url)
@@ -1531,7 +1550,7 @@ SETTINGS_DEFAULTS: Dict[str, Any] = {
     "topNRerank": 6,
     "apiToken": "",
     "rateLimitMax": 100,
-    "maxPayloadMB": 50,
+    "maxPayloadMB": 2048,
 }
 
 def _validate_settings(cfg: Dict[str, Any]) -> Dict[str, Any]:

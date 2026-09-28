@@ -112,18 +112,41 @@ def chunk_sezione(
 
         if chunk_parole + n_parole > chunk_target_parole and chunk_frasi:
             emetti(chunk_frasi)
-            # overlap: riparti dalle ultime frasi del chunk appena chiuso,
-            # non da zero, cosi' il chunk successivo mantiene contesto.
+
+            # Se la frase corrente e' piu' grande del target, non possiamo
+            # inserirla nell'overlap: altrimenti l'overlap potrebbe contenere
+            # esattamente la stessa frase e il ciclo ripeterebbe all'infinito
+            # senza mai incrementare `i`.
             parole_accumulate = 0
             frasi_overlap: list[str] = []
-            for f in reversed(chunk_frasi):
-                parole_accumulate += len(f.split())
-                frasi_overlap.insert(0, f)
-                if parole_accumulate >= overlap_parole:
-                    break
+            if overlap_parole > 0:
+                for f in reversed(chunk_frasi):
+                    parole_f = len(f.split())
+                    # Una frase che da sola satura il target non e' un overlap
+                    # utile: va emessa nel chunk precedente e poi si riparte.
+                    if not frasi_overlap and parole_f >= chunk_target_parole:
+                        break
+                    if parole_accumulate + parole_f > overlap_parole and frasi_overlap:
+                        break
+                    parole_accumulate += parole_f
+                    frasi_overlap.insert(0, f)
+                    if parole_accumulate >= overlap_parole:
+                        break
+
+            # Garanzia di progresso: dopo aver chiuso un chunk, l'indice deve
+            # avanzare oppure l'overlap deve essere strettamente piu' corto
+            # del chunk appena chiuso. Per la frase corrente molto lunga,
+            # emettiamola direttamente e incrementiamo `i`.
+            if n_parole >= chunk_target_parole and not frasi_overlap:
+                emetti([frase])
+                i += 1
+                chunk_frasi = []
+                chunk_parole = 0
+                continue
+
             chunk_frasi = frasi_overlap
             chunk_parole = parole_accumulate
-            continue  # non avanza i: la frase corrente entra nel nuovo chunk
+            continue  # la frase corrente entra nel nuovo chunk
 
         chunk_frasi.append(frase)
         chunk_parole += n_parole

@@ -26,5 +26,5 @@ export const initialSettings: AppSettings = {
   topNRerank: 6,
   apiToken: '',
   rateLimitMax: 100,
-  maxPayloadMB: 50,
+  maxPayloadMB: 2048,
 };

@@ -298,6 +298,17 @@ class DatabaseManager:
         db_path = Path(target["path"])
         export_zip = self.base_dir / f"export_{db_id}_{int(time.time())}.zip"
         shutil.make_archive(str(export_zip.with_suffix("")), "zip", db_path)
+
+        # L'archivio deve conservare anche il modello embedding associato al DB.
+        # Senza questo metadato un import valido finiva con `imported/unknown` e
+        # una query dense poteva usare un modello incompatibile con i vettori.
+        metadata = {
+            "format": "rag-database-metadata-v1",
+            "embeddingModel": target.get("embeddingModel"),
+            "dimension": target.get("dimension"),
+        }
+        with zipfile.ZipFile(export_zip.with_suffix(".zip"), "a", compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("rag_database_metadata.json", json.dumps(metadata, ensure_ascii=False, indent=2))
         return export_zip.with_suffix(".zip")
 
     def _validate_zip_members(self, archive: zipfile.ZipFile) -> None:
@@ -398,6 +409,27 @@ class DatabaseManager:
 
             dimension = self._validate_imported_database(db_root)
 
+            metadata = {}
+            metadata_path = db_root / "rag_database_metadata.json"
+            if metadata_path.is_file():
+                try:
+                    with metadata_path.open("r", encoding="utf-8") as f:
+                        candidate_metadata = json.load(f)
+                    if candidate_metadata.get("format") == "rag-database-metadata-v1":
+                        metadata = candidate_metadata
+                except (OSError, ValueError, TypeError):
+                    # Il database LanceDB resta importabile anche se il metadato
+                    # opzionale è assente o corrotto; in quel caso usiamo unknown.
+                    metadata = {}
+
+            embedding_model = metadata.get("embeddingModel") or "imported/unknown"
+            metadata_dimension = metadata.get("dimension")
+            if isinstance(metadata_dimension, int) and metadata_dimension != dimension:
+                raise ValueError(
+                    f"Archivio non valido: dimensione metadati ({metadata_dimension}) "
+                    f"diversa dallo schema LanceDB ({dimension})."
+                )
+
             # Sposta solo il contenuto gia' validato nella destinazione finale.
             target_dir.mkdir(parents=True, exist_ok=False)
             for item in db_root.iterdir():
@@ -409,7 +441,7 @@ class DatabaseManager:
                 "folderName": folder_name,
                 "createdAt": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "updatedAt": time.strftime("%Y-%m-%d %H:%M:%S"),
-                "embeddingModel": "imported/unknown",
+                "embeddingModel": embedding_model,
                 "dimension": dimension,
             }
 
