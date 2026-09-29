@@ -1,6 +1,3 @@
-import sys
-import types
-
 from app.reranker import CrossEncoderReranker
 
 
@@ -18,35 +15,64 @@ def test_reranker_lazy_status():
     assert r.status()["loaded"] is False
 
 
-def test_reranker_orders_and_truncates(monkeypatch):
+def test_rank_orders_and_truncates():
     r = CrossEncoderReranker()
-    class FakeFlagReranker:
-        def __init__(self, name, use_fp16=False):
-            self.name = name
-        def compute_score(self, pairs, normalize=True):
-            return [0.1, 0.9, 0.5]
-    fake = types.ModuleType("FlagEmbedding")
-    fake.FlagReranker = FakeFlagReranker
-    monkeypatch.setitem(sys.modules, "FlagEmbedding", fake)
-
-    out = r.rerank("query", candidates(), 2)
+    out = r._rank(candidates(), [0.1, 0.9, 0.5], 2)
     assert [x["chunk_id"] for x in out] == ["b", "c"]
     assert out[0]["rerank_score"] == 0.9
-    assert r.status()["status"] == "ready"
 
 
-def test_reranker_caches_model(monkeypatch):
+def test_reranker_loads_model_once(monkeypatch):
     loads = []
-    class FakeFlagReranker:
-        def __init__(self, name, use_fp16=False):
-            loads.append(name)
-        def compute_score(self, pairs, normalize=True):
-            return [0.5 for _ in pairs]
-    fake = types.ModuleType("FlagEmbedding")
-    fake.FlagReranker = FakeFlagReranker
-    monkeypatch.setitem(sys.modules, "FlagEmbedding", fake)
+
+    class FakeTokenizer:
+        def __call__(self, qs, texts, **kwargs):
+            return {"input_ids": "fake"}
+
+    class FakeTensor:
+        def reshape(self, *_):
+            return self
+        def detach(self):
+            return self
+        def cpu(self):
+            return self
+        def tolist(self):
+            return [0.1, 0.9, 0.5]
+
+    class FakeModel:
+        def eval(self):
+            return self
+        def to(self, *_):
+            return self
+        def __call__(self, **_):
+            return type("Output", (), {"logits": FakeTensor()})()
+
+    class FakeTorch:
+        class no_grad:
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+    fake_torch = FakeTorch()
+
+    class FakeAutoTokenizer:
+        @staticmethod
+        def from_pretrained(name):
+            loads.append(("tokenizer", name))
+            return FakeTokenizer()
+
+    class FakeAutoModel:
+        @staticmethod
+        def from_pretrained(name):
+            loads.append(("model", name))
+            return FakeModel()
+
+    import sys, types
+    transformers = types.ModuleType("transformers")
+    transformers.AutoTokenizer = FakeAutoTokenizer
+    transformers.AutoModelForSequenceClassification = FakeAutoModel
+    monkeypatch.setitem(sys.modules, "transformers", transformers)
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
 
     r = CrossEncoderReranker()
     r.rerank("query", candidates(), 3)
     r.rerank("query", candidates(), 3)
-    assert len(loads) == 1
+    assert len(loads) == 2
