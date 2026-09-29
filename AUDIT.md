@@ -1,3 +1,21 @@
+# AUDIT — Current architecture note
+
+> **Current branch state: `unified-clean-app`**
+>
+> Sections below that reference `webapp/`, `rag/`, LanceDB, PyArrow, the old React frontend, or the old ingestion endpoints are **historical audit records** from earlier architectures. Those paths have been removed from this branch.
+>
+> The active runtime is now:
+>
+> `run.py → FastAPI (app/main.py) → SQLite + Ollama + lazy Cross-Encoder → app/static/index.html`
+>
+> The active GUI is the unified single-page frontend served by FastAPI. Its ingestion dashboard uses the real persistent job API and backend stage/chunk progress. The supplied Document Intelligence GUI was used as the visual/interaction reference; its mock Express server and unrelated frontend/backend modules were not copied.
+>
+> Removed from the active tree: legacy `rag/`, legacy `webapp/`, runtime `data/`, debug log, duplicate audit skill, stale tests tied to the legacy architecture, and other generated/runtime artifacts.
+>
+> Active tests retained: `tests/test_api.py` and `tests/test_app_reranker.py`.
+>
+> Last local validation of the active backend test subset: **10 passed**. Windows runtime GUI validation still requires the user's local test run.
+
 # AUDIT.md — Function-Flow Deep Audit (Round 3)
 
 ## Audit scope
