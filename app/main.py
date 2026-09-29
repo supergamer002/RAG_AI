@@ -32,6 +32,8 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
+from .reranker import CrossEncoderReranker
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.environ.get("RAG_DATA_DIR", BASE_DIR / "data"))
 DB_PATH = DATA_DIR / "rag.db"
@@ -419,6 +421,7 @@ def chunk_text(text: str, size: int, overlap: int) -> list[str]:
 
 _cache: dict = {"model": None, "matrix": None, "meta": [], "lower": []}
 _cache_lock = threading.Lock()
+RERANKER = CrossEncoderReranker()
 
 
 def invalidate_cache() -> None:
@@ -470,8 +473,19 @@ def search(query: str, top_k: int, s: dict) -> list[dict]:
         for rank, i in enumerate(np.argsort(-kw)[:k]):
             if kw[i] > 0:
                 scores[int(i)] = scores.get(int(i), 0.0) + 1.0 / (60 + rank)
-    best = sorted(scores, key=scores.get, reverse=True)[:top_k]
-    return [{**idx["meta"][i], "score": round(float(dense[i]), 4)} for i in best]
+    # Il retrieval ibrido genera un pool piu' ampio; il Cross-Encoder
+    # valuta poi le coppie query/chunk e seleziona i risultati finali.
+    candidate_indices = sorted(scores, key=scores.get, reverse=True)[: min(n, max(top_k * 4, 20))]
+    candidates = [
+        {**idx["meta"][i], "score": round(float(dense[i]), 4)}
+        for i in candidate_indices
+    ]
+    try:
+        return RERANKER.rerank(query, candidates, top_k)
+    except Exception:
+        # Il reranking non deve rendere indisponibile il RAG se il modello
+        # non e' ancora scaricato, manca una dipendenza o il caricamento fallisce.
+        return candidates[:top_k]
 
 
 # --------------------------------------------------------------------------- #
@@ -828,6 +842,7 @@ def status() -> dict:
         "stale_documents": stale,
         "active_ingest_jobs": active_jobs,
         "ready_ingest_jobs": ready_jobs,
+        "cross_encoder": RERANKER.status(),
     }
 
 
