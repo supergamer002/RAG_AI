@@ -1,12 +1,5 @@
+.venv/
 __pycache__/
 *.pyc
+data/
 .pytest_cache/
-rag/index/store/lancedb/
-rag/index/temp_uploads/
-node_modules/
-dist/
-.env.local
-*.json
-*.pdf
-*.zip
-log_debug.log

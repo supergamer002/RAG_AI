@@ -1,13 +1,7 @@
-fastapi[standard]
-uvicorn[standard]
+fastapi
+uvicorn
 numpy
-scikit-learn
-lancedb==0.39.0
-pyarrow>=14,<26
 requests
 python-multipart
-pydantic
-pypdf
-docling>=2.59,<3
-FlagEmbedding
-torch
+pymupdf
+fonttools
