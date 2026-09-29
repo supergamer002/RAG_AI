@@ -1,4 +1,4 @@
-from app.reranker import CrossEncoderReranker
+from app.reranker import CrossEncoderReranker, _rank
 
 
 def candidates():
@@ -16,8 +16,7 @@ def test_reranker_lazy_status():
 
 
 def test_rank_orders_and_truncates():
-    r = CrossEncoderReranker()
-    out = r._rank(candidates(), [0.1, 0.9, 0.5], 2)
+    out = _rank(candidates(), [0.1, 0.9, 0.5], 2)
     assert [x["chunk_id"] for x in out] == ["b", "c"]
     assert out[0]["rerank_score"] == 0.9
 
