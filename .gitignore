@@ -1,6 +1,8 @@
 .venv/
 __pycache__/
 *.pyc
-data/
 .pytest_cache/
-/data/ingest_jobs
+data/
+frontend/node_modules/
+frontend/dist/
+npm-debug.log*
