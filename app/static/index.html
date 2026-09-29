@@ -58,9 +58,8 @@ function overallJobProgress(j){
   if(j.status==="ready") return 1;
   if(j.status==="failed" && (j.completed_files||0)+(j.failed_files||0)>=(j.total_files||1)) return 1;
   const total=Math.max(1,j.total_files||1), completed=(j.completed_files||0)+(j.failed_files||0);
-  const weights={extraction:0.10,segmentation:0.10,embedding:0.75,saving:0.05};
   const p=Math.max(0,Math.min(1,Number(j.stage_progress||0)));
-  return Math.max(0,Math.min(1,(completed+(weights[j.stage]||0)*p)/total));
+  return Math.max(0,Math.min(1,(completed+p)/total));
 }
 function stageIndex(stage){return ["extraction","segmentation","embedding","saving"].indexOf(stage)}
 function stageLabel(stage){return ({extraction:"Estrazione",segmentation:"Segmentazione",embedding:"Embedding",saving:"Salvataggio"})[stage]||"In coda"}
