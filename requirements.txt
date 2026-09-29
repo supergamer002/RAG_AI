@@ -5,4 +5,5 @@ requests
 python-multipart
 pymupdf
 fonttools
-FlagEmbedding
+torch
+transformers
